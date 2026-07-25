@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 (2026-07-25)
+
+### Features
+
+- session sidebar, non-blocking probe, and snapshot store rework (#7) ([2eb2bd1](https://github.com/urmzd/lazyspeak.nvim/commit/2eb2bd1b4f41caca94e47cd82763cf8fa7f5cff1))
+
+### Misc
+
+- bump GitHub Actions to Node 24 majors and switch app token to client-id ([483bd57](https://github.com/urmzd/lazyspeak.nvim/commit/483bd57672f1546178a159f772baea265145f61e))
+
+[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.5.0...v0.6.0)
+
+
 ## 0.5.0 (2026-05-30)
 
 ### Features
