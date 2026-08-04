@@ -26,6 +26,8 @@ M.defaults = {
 		silence_duration_ms = 400,
 		max_duration_ms = 30000,
 		partial_interval_ms = 700,
+		window_ms = 5000,
+		live_buffer = true,
 	},
 	ui = {
 		sidebar_position = "right",
@@ -54,6 +56,9 @@ M._state = "inactive"
 
 ---@type boolean
 M._listening = false
+
+---@type table?
+M._partial_range = nil
 
 ---@return lazyspeak.Sidebar
 function M._ensure_sidebar()
@@ -160,6 +165,7 @@ local function build_daemon_env(model, audio)
 		LAZYSPEAK_SILENCE_MS = tostring(audio.silence_duration_ms),
 		LAZYSPEAK_MAX_MS = tostring(audio.max_duration_ms),
 		LAZYSPEAK_PARTIAL_MS = tostring(audio.partial_interval_ms),
+		LAZYSPEAK_WINDOW_MS = tostring(audio.window_ms),
 	}
 end
 
@@ -239,23 +245,29 @@ function M._start_pipeline()
 			sb:begin_turn(text)
 			sb:set_state("idle")
 		end)
-		-- Pipe the transcript into the current buffer at the cursor position.
+		-- Final transcript: replace any partial insertion range with the complete text.
 		vim.schedule(function()
 			local buf = vim.api.nvim_get_current_buf()
-			local line = vim.api.nvim_win_get_cursor(0)[1] - 1
-			local col = vim.api.nvim_win_get_cursor(0)[2]
 			vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
-			-- Insert the transcript at the cursor, splitting on newlines for multi-line text
-			local lines = vim.split(text, "\n")
-			if #lines == 1 then
-				-- Single line: insert at cursor column
-				local current = vim.api.nvim_buf_get_text(buf, line, col, line, col, {})[1]
-				vim.api.nvim_buf_set_text(buf, line, col, line, col, { text })
+
+			if M._partial_range then
+				-- Replace the tracked partial range with the final transcript
+				local r = M._partial_range
+				M._partial_range = nil
+				local lines = vim.split(text, "\n")
+				vim.api.nvim_buf_set_text(buf, r.sline, r.scol, r.eline, r.ecol, lines)
 			else
-				-- Multi-line: replace current line and insert additional lines below
-				vim.api.nvim_buf_set_lines(buf, line, line, false, { lines[1] })
-				for i = 2, #lines do
-					vim.api.nvim_buf_add_line(buf, lines[i], true)
+				-- No partials were shown, insert at cursor like before
+				local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+				local col = vim.api.nvim_win_get_cursor(0)[2]
+				local lines = vim.split(text, "\n")
+				if #lines == 1 then
+					vim.api.nvim_buf_set_text(buf, line, col, line, col, { text })
+				else
+					vim.api.nvim_buf_set_lines(buf, line, line, false, { lines[1] })
+					for i = 2, #lines do
+						vim.api.nvim_buf_add_line(buf, lines[i], true)
+					end
 				end
 			end
 		end)

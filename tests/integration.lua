@@ -93,6 +93,9 @@ assert_eq(ls.defaults.audio.sample_rate, 16000, "default sample_rate is 16000")
 assert_eq(ls.defaults.audio.channels, 1, "default channels is 1")
 assert_eq(ls.defaults.audio.silence_duration_ms, 400, "default silence_duration_ms is 400")
 assert_eq(ls.defaults.audio.max_duration_ms, 30000, "default max_duration_ms is 30000")
+assert_eq(ls.defaults.audio.partial_interval_ms, 700, "default partial_interval_ms is 700")
+assert_eq(ls.defaults.audio.window_ms, 5000, "default window_ms is 5000")
+assert_eq(ls.defaults.audio.live_buffer, true, "default live_buffer is true")
 assert_eq(ls.defaults.ui.sidebar_position, "right", "default sidebar_position is 'right'")
 assert_eq(ls.defaults.ui.sidebar_width, 48, "default sidebar_width is 48")
 assert_eq(ls.defaults.keys.push_to_talk, "<leader>ls", "default push_to_talk key")
@@ -195,8 +198,8 @@ assert_eq(#events, 2, "two events after vad")
 assert_eq(events[2].speaking, true, "vad speaking is true")
 
 -- Simulate partial transcripts (streaming)
-test_voice:_handle_line(vim.json.encode({ type = "partial", text = "hello" }))
-test_voice:_handle_line(vim.json.encode({ type = "partial", text = "hello world" }))
+  test_voice:_handle_line(vim.json.encode({ type = "partial", text = "hello", window_start_ms = 0, window_end_ms = 5000, seq = 1 }))
+  test_voice:_handle_line(vim.json.encode({ type = "partial", text = "hello world", window_start_ms = 0, window_end_ms = 6000, seq = 2 }))
 assert_eq(#events, 4, "four events after partials")
 assert_eq(events[3].text, "hello", "first partial is 'hello'")
 assert_eq(events[4].text, "hello world", "second partial is 'hello world'")
@@ -410,9 +413,9 @@ local sim_events = {
   { type = "vad", speaking = true },
   
   -- Partial transcripts stream in as user speaks
-  { type = "partial", text = "add a function" },
-  { type = "partial", text = "add a function that sorts" },
-  { type = "partial", text = "add a function that sorts the array" },
+  { type = "partial", text = "add a function", window_start_ms = 0, window_end_ms = 3000, seq = 1 },
+  { type = "partial", text = "add a function that sorts", window_start_ms = 0, window_end_ms = 5000, seq = 2 },
+  { type = "partial", text = "add a function that sorts the array", window_start_ms = 0, window_end_ms = 7000, seq = 3 },
   
   -- VAD: user stops speaking
   { type = "vad", speaking = false },
@@ -514,6 +517,8 @@ assert_eq(ls.config.audio.vad_threshold, 0.01, "vad_threshold for env")
 assert_eq(ls.config.audio.silence_duration_ms, 600, "silence_ms for env (custom)")
 assert_eq(ls.config.audio.max_duration_ms, 30000, "max_ms for env")
 assert_eq(ls.config.audio.partial_interval_ms, 700, "partial_ms for env")
+assert_eq(ls.config.audio.window_ms, 5000, "window_ms for env")
+assert_eq(ls.config.audio.live_buffer, true, "live_buffer for env")
 
 -- ============================================================================
 -- Summary

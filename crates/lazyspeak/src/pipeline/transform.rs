@@ -1,5 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::protocol::Event;
 use crate::transcribe::SpeechTranscriber;
@@ -10,20 +10,19 @@ use super::filter::UtteranceData;
 /// Transcribes utterance audio into text via the STT backend.
 ///
 /// Final utterances become `Event::Transcript`; interim snapshots become
-/// `Event::Partial`. After each transcription the shared `partial_gate` is
-/// cleared so the capture loop may emit the next partial (single-in-flight).
+/// `Event::Partial` with sliding window metadata.
 ///
-/// A failure never becomes a `Transcript`. Emitting placeholder text like
-/// `[audio 412ms — STT backend not available]` as if the user had said it made
-/// the plugin snapshot the working tree and prompt the agent with the error
-/// string; failures are `Event::Error` so the host can treat them as such.
+/// Uses a latest-wins policy: if a partial transcription completes but a newer
+/// partial has already started, the stale result is silently discarded.
 ///
 /// Uses `spawn_blocking` because `SpeechTranscriber::transcribe` is synchronous.
 pub struct TranscribeTransform {
     transcriber: Arc<dyn SpeechTranscriber>,
     sample_rate: u32,
     stt_available: bool,
-    partial_gate: Arc<AtomicBool>,
+    /// Tracks the highest sequence number currently in-flight. Used to discard
+    /// stale partial results that complete after a newer partial has started.
+    latest_seq: Arc<AtomicU64>,
 }
 
 impl TranscribeTransform {
@@ -31,13 +30,12 @@ impl TranscribeTransform {
         transcriber: Arc<dyn SpeechTranscriber>,
         sample_rate: u32,
         stt_available: bool,
-        partial_gate: Arc<AtomicBool>,
     ) -> Self {
         Self {
             transcriber,
             sample_rate,
             stt_available,
-            partial_gate,
+            latest_seq: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -52,13 +50,15 @@ impl Transform for TranscribeTransform {
         let stt_available = self.stt_available;
         let duration_ms = input.duration_ms;
         let is_final = input.is_final;
-        let partial_gate = self.partial_gate.clone();
+        let seq = input.seq;
+        let window_start_ms = input.window_start_ms;
+        let window_end_ms = input.window_end_ms;
+        let latest_seq = self.latest_seq.clone();
+
+        // Record that this sequence is in-flight
+        latest_seq.store(seq, Ordering::Relaxed);
 
         let event = tokio::task::spawn_blocking(move || {
-            // Always release the gate when this transcription finishes, however
-            // it finishes, so the capture loop is never permanently blocked.
-            let _release = GateGuard(&partial_gate);
-
             if !stt_available {
                 return if is_final {
                     Event::Error {
@@ -68,8 +68,12 @@ impl Transform for TranscribeTransform {
                         ),
                     }
                 } else {
+                    // Stale partial — return empty, will be filtered
                     Event::Partial {
                         text: String::new(),
+                        window_start_ms,
+                        window_end_ms,
+                        seq,
                     }
                 };
             }
@@ -79,13 +83,35 @@ impl Transform for TranscribeTransform {
                     text: r.text,
                     duration_ms,
                 },
-                Ok(r) => Event::Partial { text: r.text },
+                Ok(r) => {
+                    // Latest-wins: if a newer partial is already in-flight,
+                    // discard this stale result
+                    let current_latest = latest_seq.load(Ordering::Relaxed);
+                    if seq < current_latest {
+                        Event::Partial {
+                            text: String::new(),
+                            window_start_ms,
+                            window_end_ms,
+                            seq,
+                        }
+                    } else {
+                        Event::Partial {
+                            text: r.text,
+                            window_start_ms,
+                            window_end_ms,
+                            seq,
+                        }
+                    }
+                },
                 Err(e) if is_final => Event::Error {
                     message: format!("transcription failed: {e}"),
                 },
                 // Swallow partial errors quietly — the final pass will report.
                 Err(_) => Event::Partial {
                     text: String::new(),
+                    window_start_ms,
+                    window_end_ms,
+                    seq,
                 },
             }
         })
@@ -96,11 +122,4 @@ impl Transform for TranscribeTransform {
     }
 }
 
-/// Clears the partial gate on drop, regardless of how transcription ends.
-struct GateGuard<'a>(&'a AtomicBool);
 
-impl Drop for GateGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Relaxed);
-    }
-}

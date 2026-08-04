@@ -24,8 +24,14 @@ pub enum Event {
     Vad { speaking: bool },
     /// An interim, non-final transcript emitted while the user is still
     /// speaking. Provisional — superseded by the final `Transcript`.
+    /// Uses a sliding window so each partial is constant-size audio.
     #[serde(rename = "partial")]
-    Partial { text: String },
+    Partial {
+        text: String,
+        window_start_ms: u64,
+        window_end_ms: u64,
+        seq: u64,
+    },
     #[serde(rename = "transcript")]
     Transcript { text: String, duration_ms: u64 },
     #[serde(rename = "error")]
@@ -58,9 +64,15 @@ mod tests {
     fn partial_serializes_with_partial_tag() {
         let line = serialize_event(&Event::Partial {
             text: "hello".into(),
+            window_start_ms: 0,
+            window_end_ms: 5000,
+            seq: 1,
         })
         .unwrap();
-        assert_eq!(line, r#"{"type":"partial","text":"hello"}"#);
+        assert_eq!(
+            line,
+            r#"{"type":"partial","text":"hello","window_start_ms":0,"window_end_ms":5000,"seq":1}"#
+        );
     }
 
     #[test]

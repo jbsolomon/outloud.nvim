@@ -8,6 +8,11 @@ pub struct UtteranceData {
     pub duration_ms: u64,
     /// False for interim (partial) snapshots, true for the finalized utterance.
     pub is_final: bool,
+    /// Sliding window metadata for partials (offset from utterance start in ms).
+    pub window_start_ms: u64,
+    pub window_end_ms: u64,
+    /// Monotonic sequence number for partial ordering.
+    pub seq: u64,
 }
 
 /// Filters the audio event stream: emits VAD/error events as side-effects
@@ -34,11 +39,16 @@ impl FilterTransform for VadFilter {
             }
             AudioEvent::Partial {
                 samples,
-                duration_ms,
+                window_start_ms,
+                window_end_ms,
+                seq,
             } => Ok(Some(UtteranceData {
                 samples,
-                duration_ms,
+                duration_ms: window_end_ms - window_start_ms,
                 is_final: false,
+                window_start_ms,
+                window_end_ms,
+                seq,
             })),
             AudioEvent::Utterance {
                 samples,
@@ -54,6 +64,9 @@ impl FilterTransform for VadFilter {
                     samples,
                     duration_ms,
                     is_final: true,
+                    window_start_ms: 0,
+                    window_end_ms: duration_ms,
+                    seq: 0,
                 }))
             }
             AudioEvent::Error(msg) => {
