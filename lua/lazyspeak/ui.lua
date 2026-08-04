@@ -19,10 +19,6 @@ function M.statusline()
 		return "ls:mic"
 	elseif M._state == "transcribing" then
 		return "ls:..."
-	elseif M._state == "dispatching" or M._state == "streaming" then
-		return "ls:>>>"
-	elseif M._state == "permission" then
-		return "ls:???"
 	else
 		return ""
 	end

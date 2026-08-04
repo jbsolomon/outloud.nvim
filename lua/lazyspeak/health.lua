@@ -22,48 +22,10 @@ function M.check()
 		})
 	end
 
-	-- Node / npx (for the claudecode adapter's ACP bridge)
-	if vim.fn.executable("npx") == 1 then
-		vim.health.ok("npx found (runs @agentclientprotocol/claude-agent-acp)")
-	else
-		vim.health.warn("npx not found (needed for the claudecode adapter)", {
-			"Install Node.js >= 18: https://nodejs.org",
-		})
-	end
-
-	-- Claude auth: either ANTHROPIC_API_KEY or a prior `claude login`.
-	if vim.env.ANTHROPIC_API_KEY and vim.env.ANTHROPIC_API_KEY ~= "" then
-		vim.health.ok("ANTHROPIC_API_KEY is set")
-	elseif vim.fn.executable("claude") == 1 then
-		vim.health.info("claude CLI found — run `claude login` if you haven't set ANTHROPIC_API_KEY")
-	else
-		vim.health.info("set ANTHROPIC_API_KEY or run `claude login` to authenticate Claude Code")
-	end
-
-	-- Model file
-	local install = require("lazyspeak.install")
-	if vim.fn.filereadable(install.MODEL_PATH) == 1 then
-		local size = vim.fn.getfsize(install.MODEL_PATH)
-		if size > 1000000 then
-			local size_gb = string.format("%.1f GB", size / (1024 * 1024 * 1024))
-			vim.health.ok("Voxtral model found (" .. size_gb .. ")")
-		else
-			vim.health.warn("Voxtral model file is too small — may be corrupted", {
-				"Run: :LazySpeakInstall",
-				"Or: just convert-model",
-			})
-		end
-	else
-		vim.health.info("Voxtral model not found", {
-			"Run: :LazySpeakInstall",
-			"Or: just convert-model",
-		})
-	end
-
 	-- Plugin state
 	local ok, ls = pcall(require, "lazyspeak")
-	if ok and ls.config and ls.config.agent then
-		vim.health.ok("plugin loaded (adapter: " .. ls.config.agent.adapter .. ")")
+	if ok and ls.config and ls.config.model then
+		vim.health.ok("plugin loaded and configured")
 	elseif ok then
 		vim.health.warn("plugin loaded but not configured — call require('lazyspeak').setup()")
 	else

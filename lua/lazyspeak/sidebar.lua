@@ -43,14 +43,8 @@ local HL_LINKS = {
 	LazySpeakHint = "Comment",
 	LazySpeakRule = "WinSeparator",
 	LazySpeakTurn = "Title",
-	LazySpeakMarker = "Special",
-	LazySpeakTool = "Function",
-	LazySpeakOk = "DiagnosticOk",
-	LazySpeakPending = "DiagnosticWarn",
 	LazySpeakFail = "DiagnosticError",
-	LazySpeakAsk = "WarningMsg",
 	LazySpeakHelpTitle = "Title",
-	LazySpeakHelpKey = "Constant",
 }
 
 local function define_highlights()
@@ -82,8 +76,6 @@ local BUSY = {
 	loading_model = true,
 	starting_daemon = true,
 	transcribing = true,
-	dispatching = true,
-	streaming = true,
 }
 
 local STATE_LABEL = {
@@ -94,9 +86,6 @@ local STATE_LABEL = {
 	ready = "press <Space> to record",
 	listening = "recording... <Space> to send",
 	transcribing = "transcribing...",
-	dispatching = "sending to agent...",
-	streaming = "agent working...",
-	permission = "awaiting permission",
 	idle = "idle",
 	inactive = "stopped",
 }
@@ -209,7 +198,7 @@ function Sidebar:new(opts)
 		show_help = false,
 		state = "inactive",
 		detail = nil,
-		status = { stt = "down", daemon = "down", agent = "down" },
+		status = { stt = "down", daemon = "down" },
 		entries = {},
 		-- Which entry kind is currently accepting streamed chunks.
 		open_kind = nil,
@@ -300,14 +289,10 @@ function Sidebar:_hint_line()
 		parts = { "<Space> send", "<Esc> cancel" }
 	elseif s == "ready" then
 		parts = { "<Space> record", "<Esc> close" }
-	elseif s == "permission" then
-		parts = { "answer the prompt" }
-	elseif s == "streaming" or s == "dispatching" then
-		parts = { (k.cancel or "<leader>lc") .. " interrupt" }
 	elseif BUSY[s] then
 		parts = { "working" }
 	else
-		parts = { (k.push_to_talk or "<leader>ls") .. " talk", (k.undo or "<leader>lu") .. " undo" }
+		parts = { (k.push_to_talk or "<leader>ls") .. " talk" }
 	end
 
 	parts[#parts + 1] = "? help"
@@ -337,7 +322,6 @@ function Sidebar:_render_header()
 	for _, item in ipairs({
 		{ "stt", self.status.stt },
 		{ "daemon", self.status.daemon },
-		{ "agent", self.status.agent },
 	}) do
 		local glyph = SIGNAL[item[2]] or "○"
 		spans[#spans + 1] = {
@@ -431,22 +415,6 @@ function Sidebar:_entry_lines(e, w)
 		out = box("you", e.time or "", e.text or "", w)
 	elseif e.kind == "partial" then
 		out = box("you", "…", e.text or "", w)
-	elseif e.kind == "message" then
-		out = bullet("⏺ agent", e.text, w)
-	elseif e.kind == "thought" then
-		out = bullet("⏺ thinking", e.text, w)
-	elseif e.kind == "tool" then
-		local head = "⏺ " .. e.name .. (e.detail and ("(" .. e.detail .. ")") or "")
-		out = { fit(head, w) }
-		if e.status then
-			local glyph = TOOL_GLYPH[e.status] or "·"
-			out[#out + 1] = fit("  ⎿ " .. glyph .. " " .. e.status, w)
-		end
-	elseif e.kind == "permission" then
-		out = { fit("⏺ ? " .. (e.title or "allow agent action?"), w) }
-		if e.answer then
-			out[#out + 1] = fit("  ⎿ " .. e.answer, w)
-		end
 	elseif e.kind == "error" then
 		out = bullet("⏺ ! error", e.text, w)
 	elseif e.kind == "note" then
@@ -469,8 +437,7 @@ function Sidebar:_help_lines(w)
 		{ k.push_to_talk or "<leader>ls", "talk (starts the daemon)" },
 		{ "<Space>", "record, then send" },
 		{ "<Esc>", "cancel and dismiss" },
-		{ k.cancel or "<leader>lc", "interrupt the agent" },
-		{ k.undo or "<leader>lu", "undo the last edit" },
+		{ k.cancel or "<leader>lc", "cancel recording" },
 		{ k.sidebar or "<leader>ll", "toggle this sidebar" },
 	}
 
@@ -481,8 +448,6 @@ function Sidebar:_help_lines(w)
 
 	local out = { " Getting started", "" }
 	for _, r in ipairs(rows) do
-		-- Fall back to two lines per entry when the window is too narrow for
-		-- the aligned form.
 		local one = "  " .. fit(r[1], keyw) .. "  " .. r[2]
 		if dw(one) <= w then
 			out[#out + 1] = one
@@ -491,17 +456,6 @@ function Sidebar:_help_lines(w)
 			for _, l in ipairs(wrap(r[2], math.max(4, w - 6))) do
 				out[#out + 1] = "      " .. l
 			end
-		end
-	end
-
-	local prose = {
-		'Say "undo", "cancel", or "revert" to do those hands-free.',
-		"Name files explicitly — the agent is not told which buffer you have open or where your cursor is.",
-	}
-	for _, p in ipairs(prose) do
-		out[#out + 1] = ""
-		for _, l in ipairs(wrap(p, math.max(4, w - 2))) do
-			out[#out + 1] = " " .. l
 		end
 	end
 
@@ -566,20 +520,8 @@ function Sidebar:_highlight(start_row, lines, help_len)
 			group = (i == 1) and "LazySpeakHelpTitle" or "LazySpeakHint"
 		elseif line:match("^[╭│╰]") then
 			group = "LazySpeakTurn"
-		elseif line:match("^⏺ %?") then
-			group = "LazySpeakAsk"
 		elseif line:match("^⏺ !") then
 			group = "LazySpeakFail"
-		elseif line:match("^⏺ agent") or line:match("^⏺ thinking") then
-			group = "LazySpeakMarker"
-		elseif line:match("^⏺ ") then
-			group = "LazySpeakTool"
-		elseif line:match("^%s+⎿ ✓") then
-			group = "LazySpeakOk"
-		elseif line:match("^%s+⎿ ✗") then
-			group = "LazySpeakFail"
-		elseif line:match("^%s+⎿") then
-			group = "LazySpeakPending"
 		end
 
 		if group then
@@ -624,8 +566,6 @@ function Sidebar:_push(e)
 	self:_ensure_buf()
 	local was_empty = #self.entries == 0
 	self.entries[#self.entries + 1] = e
-	-- The empty-state help block occupies the conversation region until the
-	-- first entry arrives, so that transition needs a full rebuild.
 	if was_empty and not self.show_help then
 		self:_render_all()
 		return 1
@@ -651,28 +591,9 @@ function Sidebar:_pop()
 	self.entries[i] = nil
 end
 
---- Route a streamed chunk into the open entry of `kind`, opening one if the
---- previous entry was something else.
----@param kind string
----@param chunk string
-function Sidebar:_stream(kind, chunk)
-	if chunk == nil or chunk == "" then
-		return
-	end
-	self:_ensure_buf()
-	local i = #self.entries
-	if self.open_kind == kind and self.entries[i] and self.entries[i].kind == kind then
-		self.entries[i].text = (self.entries[i].text or "") .. chunk
-		self:_render_entry(i)
-	else
-		self.open_kind = kind
-		self:_push({ kind = kind, text = chunk })
-	end
-end
-
 -- Status ---------------------------------------------------------------
 
----@param key string one of "stt", "daemon", "agent"
+---@param key string one of "stt", "daemon"
 ---@param value string one of "down", "starting", "up", "error"
 function Sidebar:set_status(key, value)
 	self.status[key] = value
@@ -749,78 +670,10 @@ end
 function Sidebar:begin_turn(transcript)
 	self:_ensure_buf()
 	self:clear_partial()
-	self.open_kind = nil
-	self.tool_index = {}
-	self.turns = self.turns + 1
 	self:_push({ kind = "turn", text = transcript or "", time = os.date("%H:%M") })
 end
 
----@param chunk string
-function Sidebar:append_message(chunk)
-	self:_stream("message", chunk)
-end
 
----@param chunk string
-function Sidebar:append_thought(chunk)
-	self:_stream("thought", chunk)
-end
-
---- Record or update a tool call. Updates re-render the original entry so
---- status transitions do not duplicate it.
----@param ev lazyspeak.Event
-function Sidebar:add_tool_call(ev)
-	self:_ensure_buf()
-	local id = ev.tool_call_id
-	if id and self.tool_index[id] then
-		local i = self.tool_index[id]
-		local e = self.entries[i]
-		if e then
-			e.status = ev.status
-			self:_render_entry(i)
-			return
-		end
-	end
-	self.open_kind = nil
-	local i = self:_push({
-		kind = "tool",
-		name = ev.tool_name or "tool",
-		detail = ev.tool_detail,
-		status = ev.status,
-	})
-	if id then
-		self.tool_index[id] = i
-	end
-end
-
----@param diff lazyspeak.Diff
-function Sidebar:add_diff(diff)
-	self.open_kind = nil
-	self:_push({
-		kind = "tool",
-		name = "Edit",
-		detail = vim.fn.fnamemodify(diff.path, ":."),
-		status = "completed",
-	})
-end
-
----@param perm lazyspeak.Permission
-function Sidebar:set_permission(perm)
-	self.open_kind = nil
-	self._perm_index = self:_push({ kind = "permission", title = perm.title })
-end
-
---- Record how the pending permission request resolved.
----@param answer string
-function Sidebar:resolve_permission(answer)
-	local i = self._perm_index
-	if i and self.entries[i] and self.entries[i].kind == "permission" then
-		self.entries[i].answer = answer
-		self:_render_entry(i)
-		self._perm_index = nil
-		return
-	end
-	self:_push({ kind = "note", text = "→ " .. answer })
-end
 
 ---@param message string
 function Sidebar:add_error(message)
@@ -921,7 +774,6 @@ function Sidebar:dispose()
 	end
 	self.buf = nil
 	self.entries = {}
-	self.tool_index = {}
 	self.open_kind = nil
 end
 
