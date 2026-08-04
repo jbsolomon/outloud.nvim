@@ -76,3 +76,81 @@ impl FilterTransform for VadFilter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::AudioEvent;
+
+    fn make_filter() -> VadFilter {
+        let (_event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
+        let _ = event_rx; // suppress unused warning
+        VadFilter::new(_event_tx)
+    }
+
+    #[tokio::test]
+    async fn vad_true_is_suppressed() {
+        let mut filter = make_filter();
+        let result = filter.apply(AudioEvent::Vad(true)).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn vad_false_is_suppressed() {
+        let mut filter = make_filter();
+        let result = filter.apply(AudioEvent::Vad(false)).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn utterance_becomes_utterance_data() {
+        let mut filter = make_filter();
+        let samples = vec![0.1, 0.2, 0.3];
+        let result = filter
+            .apply(AudioEvent::Utterance {
+                samples: samples.clone(),
+                duration_ms: 100,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.samples, samples);
+        assert_eq!(result.duration_ms, 100);
+        assert!(result.is_final);
+        assert_eq!(result.window_start_ms, 0);
+        assert_eq!(result.window_end_ms, 100);
+        assert_eq!(result.seq, 0);
+    }
+
+    #[tokio::test]
+    async fn partial_becomes_utterance_data() {
+        let mut filter = make_filter();
+        let samples = vec![0.1, 0.2];
+        let result = filter
+            .apply(AudioEvent::Partial {
+                samples: samples.clone(),
+                window_start_ms: 500,
+                window_end_ms: 5500,
+                seq: 3,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.samples, samples);
+        assert!(!result.is_final);
+        assert_eq!(result.window_start_ms, 500);
+        assert_eq!(result.window_end_ms, 5500);
+        assert_eq!(result.seq, 3);
+        assert_eq!(result.duration_ms, 5000); // window_end - window_start
+    }
+
+    #[tokio::test]
+    async fn error_is_suppressed() {
+        let mut filter = make_filter();
+        let result = filter
+            .apply(AudioEvent::Error("test error".into()))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+}

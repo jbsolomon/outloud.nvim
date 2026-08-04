@@ -161,6 +161,39 @@ assert_ok(setup_ok, "setup({}) runs without error", setup_err)
 -- Config should be populated after setup
 assert_ok(type(ls.config) == "table", "config table exists after setup")
 assert_ok(ls.config.agent == nil, "config.agent is nil (no ACP)")
+assert_ok(ls.config.accumulator ~= nil, "config.accumulator exists")
+assert_ok(ls.config.accumulator.enabled == false, "accumulator disabled by default")
+
+-- 8. Accumulator module
+section("Accumulator")
+
+local Accumulator = require("lazyspeak.accumulator").Accumulator
+assert_ok(type(Accumulator) == "table", "Accumulator class exists")
+assert_ok(type(Accumulator.new) == "function", "Accumulator:new()")
+assert_ok(type(Accumulator.append) == "function", "Accumulator:append()")
+assert_ok(type(Accumulator.clear) == "function", "Accumulator:clear()")
+assert_ok(type(Accumulator.confirm) == "function", "Accumulator:confirm()")
+assert_ok(type(Accumulator.dispose) == "function", "Accumulator:dispose()")
+assert_ok(type(Accumulator.has_text) == "function", "Accumulator:has_text()")
+
+-- Smoke test accumulator instance
+local acc = Accumulator:new({})
+assert_ok(acc:has_text() == false, "new accumulator has no text")
+acc:append("hello world")
+assert_ok(acc:has_text() == true, "accumulator has text after append")
+assert_ok(acc.text == "hello world", "accumulator text correct")
+acc:append("more text")
+assert_ok(acc.text == "hello world more text", "accumulator joins chunks with space")
+acc:clear()
+assert_ok(acc:has_text() == false, "accumulator empty after clear")
+acc:dispose()
+
+-- 9. Public API for accumulator commands
+section("Accumulator API")
+
+assert_ok(type(ls.confirm_accumulator) == "function", "lazyspeak.confirm_accumulator()")
+assert_ok(type(ls.cancel_accumulator) == "function", "lazyspeak.cancel_accumulator()")
+assert_ok(type(ls.clear_accumulator) == "function", "lazyspeak.clear_accumulator()")
 
 -- Summary
 section("Results")

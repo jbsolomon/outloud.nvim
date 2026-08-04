@@ -40,13 +40,104 @@ impl Default for AudioConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config() {
+        let cfg = AudioConfig::default();
+        assert_eq!(cfg.sample_rate, 16000);
+        assert_eq!(cfg.channels, 1);
+        assert_eq!(cfg.vad_threshold, 0.01);
+        assert_eq!(cfg.silence_duration_ms, 400);
+        assert_eq!(cfg.max_duration_ms, 30000);
+        assert_eq!(cfg.partial_interval_ms, 700);
+        assert_eq!(cfg.window_ms, 5000);
+    }
+
+    #[test]
+    fn from_env_no_vars() {
+        // With no LAZYSPEAK_* env vars set, should fall back to defaults
+        let cfg = AudioConfig::from_env_map(std::iter::empty::<(&str, &str)>());
+        assert_eq!(cfg.sample_rate, 16000);
+        assert_eq!(cfg.channels, 1);
+        assert_eq!(cfg.vad_threshold, 0.01);
+        assert_eq!(cfg.silence_duration_ms, 400);
+        assert_eq!(cfg.max_duration_ms, 30000);
+        assert_eq!(cfg.partial_interval_ms, 700);
+        assert_eq!(cfg.window_ms, 5000);
+    }
+
+    #[test]
+    fn from_env_overrides_vad_threshold() {
+        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_VAD_THRESHOLD", "0.05")].into_iter());
+        assert_eq!(cfg.vad_threshold, 0.05);
+        // Others unchanged
+        assert_eq!(cfg.silence_duration_ms, 400);
+    }
+
+    #[test]
+    fn from_env_overrides_silence_ms() {
+        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_SILENCE_MS", "800")].into_iter());
+        assert_eq!(cfg.silence_duration_ms, 800);
+    }
+
+    #[test]
+    fn from_env_overrides_max_ms() {
+        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_MAX_MS", "60000")].into_iter());
+        assert_eq!(cfg.max_duration_ms, 60000);
+    }
+
+    #[test]
+    fn from_env_overrides_partial_ms() {
+        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_PARTIAL_MS", "0")].into_iter());
+        assert_eq!(cfg.partial_interval_ms, 0);
+    }
+
+    #[test]
+    fn from_env_overrides_window_ms() {
+        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_WINDOW_MS", "10000")].into_iter());
+        assert_eq!(cfg.window_ms, 10000);
+    }
+
+    #[test]
+    fn from_env_invalid_value_falls_back() {
+        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_SILENCE_MS", "not_a_number")].into_iter());
+        assert_eq!(cfg.silence_duration_ms, 400); // default
+    }
+
+    #[test]
+    fn from_env_multiple_overrides() {
+        let cfg = AudioConfig::from_env_map([
+            ("LAZYSPEAK_VAD_THRESHOLD", "0.1"),
+            ("LAZYSPEAK_SILENCE_MS", "200"),
+            ("LAZYSPEAK_PARTIAL_MS", "500"),
+        ].into_iter());
+        assert_eq!(cfg.vad_threshold, 0.1);
+        assert_eq!(cfg.silence_duration_ms, 200);
+        assert_eq!(cfg.partial_interval_ms, 500);
+        // Unchanged
+        assert_eq!(cfg.max_duration_ms, 30000);
+        assert_eq!(cfg.window_ms, 5000);
+    }
+}
+
 impl AudioConfig {
-    /// Build from `LAZYSPEAK_*` environment variables, falling back to defaults
-    /// for anything unset or unparseable.
-    pub fn from_env() -> Self {
-        fn parse<T: std::str::FromStr>(key: &str, default: T) -> T {
-            std::env::var(key)
-                .ok()
+    /// Build from an iterator of (key, value) pairs, falling back to
+    /// defaults for anything missing or unparseable.
+    pub fn from_env_map<'a, I, K, V>(env: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let map: std::collections::HashMap<String, String> = env
+            .into_iter()
+            .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+            .collect();
+        fn parse<T: std::str::FromStr>(map: &std::collections::HashMap<String, String>, key: &str, default: T) -> T {
+            map.get(key)
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(default)
         }
@@ -54,12 +145,18 @@ impl AudioConfig {
         AudioConfig {
             sample_rate: d.sample_rate,
             channels: d.channels,
-            vad_threshold: parse("LAZYSPEAK_VAD_THRESHOLD", d.vad_threshold),
-            silence_duration_ms: parse("LAZYSPEAK_SILENCE_MS", d.silence_duration_ms),
-            max_duration_ms: parse("LAZYSPEAK_MAX_MS", d.max_duration_ms),
-            partial_interval_ms: parse("LAZYSPEAK_PARTIAL_MS", d.partial_interval_ms),
-            window_ms: parse("LAZYSPEAK_WINDOW_MS", d.window_ms),
+            vad_threshold: parse(&map, "LAZYSPEAK_VAD_THRESHOLD", d.vad_threshold),
+            silence_duration_ms: parse(&map, "LAZYSPEAK_SILENCE_MS", d.silence_duration_ms),
+            max_duration_ms: parse(&map, "LAZYSPEAK_MAX_MS", d.max_duration_ms),
+            partial_interval_ms: parse(&map, "LAZYSPEAK_PARTIAL_MS", d.partial_interval_ms),
+            window_ms: parse(&map, "LAZYSPEAK_WINDOW_MS", d.window_ms),
         }
+    }
+
+    /// Build from `LAZYSPEAK_*` environment variables, falling back to defaults
+    /// for anything unset or unparseable.
+    pub fn from_env() -> Self {
+        Self::from_env_map(std::env::vars())
     }
 }
 

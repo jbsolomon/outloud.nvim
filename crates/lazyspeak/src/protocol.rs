@@ -87,4 +87,134 @@ mod tests {
             r#"{"type":"transcript","text":"done","duration_ms":42}"#
         );
     }
+
+    // --- Command parsing ---
+
+    #[test]
+    fn parse_start_listening() {
+        let cmd = parse_command(r#"{"cmd": "start_listening"}"#).unwrap();
+        assert!(matches!(cmd, Command::StartListening));
+    }
+
+    #[test]
+    fn parse_stop_listening() {
+        let cmd = parse_command(r#"{"cmd": "stop_listening"}"#).unwrap();
+        assert!(matches!(cmd, Command::StopListening));
+    }
+
+    #[test]
+    fn parse_cancel() {
+        let cmd = parse_command(r#"{"cmd": "cancel"}"#).unwrap();
+        assert!(matches!(cmd, Command::Cancel));
+    }
+
+    #[test]
+    fn parse_shutdown() {
+        let cmd = parse_command(r#"{"cmd": "shutdown"}"#).unwrap();
+        assert!(matches!(cmd, Command::Shutdown));
+    }
+
+    #[test]
+    fn parse_command_trims_whitespace() {
+        let cmd = parse_command("  {\"cmd\": \"cancel\"}  ").unwrap();
+        assert!(matches!(cmd, Command::Cancel));
+    }
+
+    #[test]
+    fn parse_invalid_command_returns_err() {
+        assert!(parse_command(r#"{"cmd": "bogus"}"#).is_err());
+    }
+
+    #[test]
+    fn parse_malformed_json_returns_err() {
+        assert!(parse_command("not json at all").is_err());
+    }
+
+    #[test]
+    fn parse_empty_object_returns_err() {
+        assert!(parse_command(r#"{}"#).is_err());
+    }
+
+    // --- Event serialization ---
+
+    #[test]
+    fn status_event_serializes() {
+        let line = serialize_event(&Event::Status { state: State::Listening }).unwrap();
+        assert_eq!(line, r#"{"type":"status","state":"listening"}"#);
+    }
+
+    #[test]
+    fn vad_event_serializes_speaking() {
+        let line = serialize_event(&Event::Vad { speaking: true }).unwrap();
+        assert_eq!(line, r#"{"type":"vad","speaking":true}"#);
+    }
+
+    #[test]
+    fn vad_event_serializes_silent() {
+        let line = serialize_event(&Event::Vad { speaking: false }).unwrap();
+        assert_eq!(line, r#"{"type":"vad","speaking":false}"#);
+    }
+
+    #[test]
+    fn error_event_serializes() {
+        let line = serialize_event(&Event::Error {
+            message: "something broke".into(),
+        })
+        .unwrap();
+        assert_eq!(line, r#"{"type":"error","message":"something broke"}"#);
+    }
+
+    #[test]
+    fn state_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&State::Idle).unwrap(),
+            r#""idle""#
+        );
+        assert_eq!(
+            serde_json::to_string(&State::Listening).unwrap(),
+            r#""listening""#
+        );
+        assert_eq!(
+            serde_json::to_string(&State::Transcribing).unwrap(),
+            r#""transcribing""#
+        );
+    }
+
+    #[test]
+    fn state_deserializes_lowercase() {
+        let idle: State = serde_json::from_str(r#""idle""#).unwrap();
+        assert!(matches!(idle, State::Idle));
+
+        let listening: State = serde_json::from_str(r#""listening""#).unwrap();
+        assert!(matches!(listening, State::Listening));
+
+        let transcribing: State = serde_json::from_str(r#""transcribing""#).unwrap();
+        assert!(matches!(transcribing, State::Transcribing));
+    }
+
+    // --- Partial event fields ---
+
+    #[test]
+    fn partial_with_empty_text() {
+        let line = serialize_event(&Event::Partial {
+            text: String::new(),
+            window_start_ms: 100,
+            window_end_ms: 200,
+            seq: 5,
+        })
+        .unwrap();
+        assert!(line.contains(r#""text":"""#));
+        assert!(line.contains(r#""seq":5"#));
+    }
+
+    #[test]
+    fn transcript_with_special_characters() {
+        let line = serialize_event(&Event::Transcript {
+            text: "hello \"world\" \\test".into(),
+            duration_ms: 1000,
+        })
+        .unwrap();
+        assert!(line.contains(r#"hello \"world\" \\test"#));
+    }
 }
+

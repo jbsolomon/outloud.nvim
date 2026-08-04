@@ -160,6 +160,56 @@ user types :VoiceConfirmBuf → CodeCompanion handler invoked with:
 → handler returns proposed edits → applied to buffer → user can undo
 ```
 
+### Scratchpad Mode (Iterative Accumulator)
+
+In **scratchpad mode** (`mode = "scratchpad"`), the accumulator becomes a live WIP buffer that the LLM iteratively refines. Each utterance is treated as an instruction to update the scratch pad. The LLM sees the full scratch pad state and the latest instruction, and returns the revised scratch pad.
+
+```
+speak → iterate (scratchpad + utterance → LLM) → updated scratchpad
+speak → iterate (scratchpad + utterance → LLM) → updated scratchpad
+speak → iterate (scratchpad + utterance → LLM) → updated scratchpad
+[confirm] → insert final scratchpad at cursor
+```
+
+The user can say "add a function", then "no, delete that line", and the LLM evaluates each instruction against the evolving scratch pad.
+
+#### Scratchpad Architecture
+
+**`Accumulator:iterate(utterance, on_complete)`**
+- Sends `(scratchpad_content, latest_utterance)` to the LLM
+- The LLM response **replaces** the scratchpad content (not appends)
+- Preview buffer auto-refreshes after each LLM response
+- `_iterating` gate prevents concurrent LLM calls
+- If an LLM call is in-flight, utterances are queued and processed sequentially
+
+**`Accumulator:_build_scratchpad_prompt(utterance)`**
+- Builds a prompt with `<scratchpad>` and `<instruction>` XML tags
+- Uses configurable `scratchpad_system` template (customizable in config)
+- Default template: "You are editing a scratch pad... Return only the updated scratch pad content."
+
+**`Accumulator:_apply_scratchpad_response(response, utterance, on_complete)`**
+- Extracts text from CodeCompanion response
+- Trims whitespace for clean scratchpad content
+- Calls `_apply_scratchpad_update` to replace accumulator text
+
+**`Accumulator:_apply_scratchpad_update(text, on_complete)`**
+- Replaces `self.text` with LLM response
+- Refreshes the preview buffer
+- Clears `_iterating` gate
+- Processes any queued utterances sequentially
+
+#### Scratchpad Fallback Chain
+
+1. **CodeCompanion handler** (`handler.name`) — primary path
+2. **Custom function handler** (`handler.fn`) — receives `(utterance, { scratchpad = text })`
+3. **Direct append** — if no handler, falls back to dumb accumulation
+
+#### Scratchpad Wiring in `init.lua`
+
+- On final transcript: calls `iterate(text)` in scratchpad mode, `append(text)` in classic mode
+- On partials: always `append(text)` for live preview (iteration only on authoritative transcript)
+- Preview window auto-refreshes after each LLM response
+
 ### Architecture Changes
 
 #### Plugin (Lua)
@@ -374,10 +424,11 @@ The two modes are independent:
 |----------------|-------------|----------|
 | ❌ | ❌ | Current behavior: single-shot transcript, direct insertion |
 | ✅ | ❌ | Sliding window: live partial feedback via windowed STT, final transcript inserted |
-| ❌ | ✅ | Accumulator mode: single-shot transcript, accumulated, LLM-processed on confirm |
-| ✅ | ✅ | Both: sliding window chunks accumulated, LLM-processed on confirm (best UX) |
+| ❌ | ✅ (classic) | Accumulator mode: single-shot transcript, accumulated, LLM-processed on confirm |
+| ❌ | ✅ (scratchpad) | Scratchpad mode: each utterance iteratively refines the scratch pad via LLM |
+| ✅ | ✅ (scratchpad) | Sliding window chunks feed scratchpad, LLM refines iteratively (best UX) |
 
-When both are enabled, sliding window chunks feed into the accumulator buffer, giving the user a live preview of what they've said while the LLM refines it on confirm.
+When both are enabled, sliding window chunks feed into the scratchpad buffer, giving the user a live preview of what they've said while the LLM iteratively refines it.
 
 ---
 
@@ -393,14 +444,15 @@ When both are enabled, sliding window chunks feed into the accumulator buffer, g
 6. **Plugin**: Final transcript replaces partial range in `init.lua`
 7. **Tests**: Integration tests for sliding window partials + buffer merging
 
-### Phase 2: Accumulator Mode (Plugin Only)
+### Phase 2: Accumulator Mode (Plugin Only) ✅ DONE
 
-1. **New module**: `lua/lazyspeak/accumulator.lua`
+1. **New module**: `lua/lazyspeak/accumulator.lua` — accumulator module with classic + scratchpad modes
 2. **Config**: Add accumulator config section to `init.lua`
-3. **Commands**: `:VoiceConfirmBuf`, `:VoiceCancelBuf`
+3. **Commands**: `:VoiceConfirmBuf`, `:VoiceCancelBuf`, `:VoiceClearBuf`
 4. **CodeCompanion integration**: Handler invocation with context
 5. **Sidebar**: Accumulation entry display
-6. **Tests**: Integration tests for accumulator flow
+6. **Tests**: Integration tests for accumulator flow (sections 14, 14b, 15)
+7. **Scratchpad mode**: Iterative LLM refinement with `_iterating` gate and queuing (section 16)
 
 ### Phase 3: Polish
 
@@ -427,18 +479,21 @@ When both are enabled, sliding window chunks feed into the accumulator buffer, g
 ## File Changes Summary
 
 ### New Files
-- `lua/lazyspeak/accumulator.lua` — accumulator module
+- `lua/lazyspeak/accumulator.lua` — accumulator module (classic + scratchpad modes)
 
 ### Modified Files
+- `lua/lazyspeak/init.lua` — config, wiring, commands, scratchpad iteration on transcript
+- `lua/lazyspeak/voice.lua` — partial callbacks with insertion range tracking
+- `plugin/lazyspeak.vim` — new commands (`:VoiceConfirmBuf`, `:VoiceCancelBuf`, `:VoiceClearBuf`)
+- `tests/integration.lua` — tests for accumulator (sections 14, 14b, 15) + scratchpad (section 16)
+- `tests/verify.lua` — accumulator smoke tests + API checks
+
+### Pending (Sliding Window)
 - `crates/lazyspeak/src/audio.rs` — sliding window ring buffer, remove full-buffer clone
 - `crates/lazyspeak/src/protocol.rs` — window metadata on `Partial` event
 - `crates/lazyspeak/src/pipeline/transform.rs` — remove `GateGuard`, latest-wins policy
 - `crates/lazyspeak/src/main.rs` — `LAZYSPEAK_WINDOW_MS` config
-- `lua/lazyspeak/init.lua` — config, wiring, commands, final transcript merge
-- `lua/lazyspeak/voice.lua` — partial callbacks with insertion range tracking
 - `lua/lazyspeak/sidebar.lua` — accumulation entry display
 - `lua/lazyspeak/health.lua` — check CodeCompanion availability
-- `plugin/lazyspeak.vim` — new commands
 - `SPEC.md` — documentation update
-- `tests/integration.lua` — tests for new modes
 

@@ -13,3 +13,6 @@ command! LazySpeakUndo lua vim.notify('[lazyspeak] undo is no longer available i
 command! LazySpeakSnapshots lua vim.notify('[lazyspeak] snapshots are no longer available in transcription-only mode', vim.log.levels.WARN)
 command! LazySpeakSnapshotsPrune lua vim.notify('[lazyspeak] snapshots are no longer available in transcription-only mode', vim.log.levels.WARN)
 command! LazySpeakInstall lua require('lazyspeak.install').run()
+command! VoiceConfirmBuf lua require('lazyspeak').confirm_accumulator()
+command! VoiceCancelBuf lua require('lazyspeak').cancel_accumulator()
+command! VoiceClearBuf lua require('lazyspeak').clear_accumulator()

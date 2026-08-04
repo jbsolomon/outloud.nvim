@@ -207,3 +207,92 @@ fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
 
     Ok(buf)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_wav_produces_valid_header() {
+        let samples = vec![0.0f32; 160];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        // WAV files start with "RIFF"
+        assert_eq!(&wav[..4], b"RIFF");
+        // And contain "WAVE"
+        assert_eq!(&wav[8..12], b"WAVE");
+    }
+
+    #[test]
+    fn encode_wav_correct_sample_count() {
+        // WAV header is 44 bytes for PCM mono 16-bit
+        let samples = vec![0.5f32; 100];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        // 44 byte header + 100 samples * 2 bytes per sample
+        assert_eq!(wav.len(), 44 + 100 * 2);
+    }
+
+    #[test]
+    fn encode_wav_silence_is_near_zero() {
+        let samples = vec![0.0f32; 160];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        // All samples should be 0 (silence)
+        let audio_data = &wav[44..];
+        for chunk in audio_data.chunks(2) {
+            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+            assert_eq!(sample, 0);
+        }
+    }
+
+    #[test]
+    fn encode_wav_full_scale_positive() {
+        let samples = vec![1.0f32; 1];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        let audio_data = &wav[44..];
+        let sample = i16::from_le_bytes([audio_data[0], audio_data[1]]);
+        assert_eq!(sample, 32767);
+    }
+
+    #[test]
+    fn encode_wav_full_scale_negative() {
+        let samples = vec![-1.0f32; 1];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        let audio_data = &wav[44..];
+        let sample = i16::from_le_bytes([audio_data[0], audio_data[1]]);
+        // -1.0 * 32767.0 = -32767.0 (not -32768, since multiplier is 32767)
+        assert_eq!(sample, -32767);
+    }
+
+    #[test]
+    fn encode_wav_clamps_over_scale() {
+        let samples = vec![2.0f32; 1];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        let audio_data = &wav[44..];
+        let sample = i16::from_le_bytes([audio_data[0], audio_data[1]]);
+        assert_eq!(sample, 32767); // clamped
+    }
+
+    #[test]
+    fn encode_wav_clamps_under_scale() {
+        let samples = vec![-2.0f32; 1];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        let audio_data = &wav[44..];
+        let sample = i16::from_le_bytes([audio_data[0], audio_data[1]]);
+        assert_eq!(sample, -32768); // clamped
+    }
+
+    #[test]
+    fn encode_wav_different_sample_rates() {
+        let samples = vec![0.5f32; 8000];
+        let wav = encode_wav(&samples, 8000).unwrap();
+        assert!(wav.len() > 44);
+    }
+
+    #[test]
+    fn encode_wav_empty_samples() {
+        let samples: Vec<f32> = vec![];
+        let wav = encode_wav(&samples, 16000).unwrap();
+        // Just the header, no audio data
+        assert_eq!(wav.len(), 44);
+    }
+}
+
