@@ -1,4 +1,4 @@
-# lazyspeak.nvim
+# outloud.nvim
 
 Voice-driven coding for Neovim. Speak your intent, edits appear in your editor.
 
@@ -20,7 +20,7 @@ No cloud STT dependency. No TTS. You speak, it codes.
 │ Neovim                                                          │
 │                                                                 │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │ lazyspeak.nvim (Lua)                                      │  │
+│  │ outloud.nvim (Lua)                                      │  │
 │  │                                                           │  │
 │  │  ┌───────────┐  ┌──────────┐  ┌───────────┐ ┌──────────┐│  │
 │  │  │ voice.lua │  │ core.lua │  │sidebar.lua│ │health.lua││  │
@@ -46,7 +46,7 @@ No cloud STT dependency. No TTS. You speak, it codes.
             │ stdin/stdout JSON lines
             ▼
 ┌──────────────────┐
-│ lazyspeak-daemon │
+│ outloud-daemon │
 │ (Rust binary)    │
 │ - mic capture    │
 │ - VAD            │
@@ -68,31 +68,31 @@ The core abstraction. All adapters translate to/from these IR types. This decoup
 ```lua
 -- core.lua defines the IR
 
----@class lazyspeak.Request
+---@class outloud.Request
 ---@field type "prompt" | "cancel"
 ---@field session_id string
 ---@field text string              -- the transcript
 
----@class lazyspeak.Event
+---@class outloud.Event
 ---@field type "message" | "tool_call" | "diff" | "permission" | "done" | "error"
 ---@field session_id string
 ---@field text? string             -- streamed agent text
 ---@field tool_name? string        -- tool being called
----@field diff? lazyspeak.Diff     -- proposed file edit
----@field permission? lazyspeak.Permission -- agent asking for approval
+---@field diff? outloud.Diff     -- proposed file edit
+---@field permission? outloud.Permission -- agent asking for approval
 ---@field error? string
 
----@class lazyspeak.Diff
+---@class outloud.Diff
 ---@field path string              -- absolute file path
 ---@field old_content string
 ---@field new_content string
 
----@class lazyspeak.Permission
+---@class outloud.Permission
 ---@field id string
 ---@field description string       -- "Write to src/auth.lua"
 ---@field callback fun(approved: boolean)
 
----@class lazyspeak.Snapshot
+---@class outloud.Snapshot
 ---@field id string                -- unique snapshot id (timestamp-based)
 ---@field session_id string
 ---@field transcript string        -- what the user said
@@ -101,18 +101,18 @@ The core abstraction. All adapters translate to/from these IR types. This decoup
 ---@field stash_ref string         -- git stash ref (stash@{n})
 ---@field undo_data table<string, string>  -- fallback: path → original content (non-git)
 
----@class lazyspeak.Adapter
+---@class outloud.Adapter
 ---@field start fun(opts: table): nil
 ---@field stop fun(): nil
----@field send fun(req: lazyspeak.Request): nil
----@field on_event fun(callback: fun(event: lazyspeak.Event)): nil
+---@field send fun(req: outloud.Request): nil
+---@field on_event fun(callback: fun(event: outloud.Event)): nil
 ```
 
-Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-specific messages — only IR types.
+Every adapter implements `outloud.Adapter`. The plugin never talks protocol-specific messages — only IR types.
 
 ### Components
 
-#### 1. `lua/lazyspeak/` — Neovim plugin (Lua)
+#### 1. `lua/outloud/` — Neovim plugin (Lua)
 
 **voice.lua** — Manages the Rust STT daemon
 - Spawns/stops the daemon process
@@ -139,7 +139,7 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 
 **snapshot.lua** — Pre-turn snapshots for undo/revert
 - Stored **outside the repository**, at
-  `$XDG_STATE_HOME/nvim/lazyspeak/snapshots/<session>/<snapshot>/`. Writing
+  `$XDG_STATE_HOME/nvim/outloud/snapshots/<session>/<snapshot>/`. Writing
   through `git stash store` put plugin bookkeeping into the user's own stash
   list, where it accumulated and mixed with their real stashes. `stdpath("state")`
   because this is regenerable session state, and where Neovim keeps undo/swap/shada
@@ -150,7 +150,7 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 - A turn that changes nothing discards its snapshot, guarded by a content
   fingerprint of `git diff HEAD` (porcelain names which files differ, not how,
   so it missed edits to already-modified files)
-- Eviction past `max_stack`, `:LazySpeakStop`, and exit all delete stored copies;
+- Eviction past `max_stack`, `:OutLoudStop`, and exit all delete stored copies;
   startup sweeps session dirs older than `max_age_days`
 - Requires a git repository: without it there is no cheap way to know which
   files a turn might touch
@@ -174,7 +174,7 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 
 #### 2. `crates/` — Rust daemon binary (~5 MB)
 
-- **lazyspeak**: single crate (lib + binary) — audio capture (cpal), energy-based VAD, STT HTTP client, JSON lines protocol, event loop wiring audio → STT → protocol over stdin/stdout
+- **outloud**: single crate (lib + binary) — audio capture (cpal), energy-based VAD, STT HTTP client, JSON lines protocol, event loop wiring audio → STT → protocol over stdin/stdout
 - A failed transcription emits `Event::Error`, never a `Transcript` carrying
   placeholder text. Fabricated transcripts were snapshotted and sent to the
   agent as if the user had said them
@@ -188,7 +188,7 @@ Every adapter implements `lazyspeak.Adapter`. The plugin never talks protocol-sp
 
 ## ACP Integration
 
-lazyspeak.nvim implements an **ACP host** — the Neovim-side client that speaks the Agent Client Protocol. This is the same pattern as `vim.lsp` (JSON-RPC over stdio) but bidirectional.
+outloud.nvim implements an **ACP host** — the Neovim-side client that speaks the Agent Client Protocol. This is the same pattern as `vim.lsp` (JSON-RPC over stdio) but bidirectional.
 
 ### Lifecycle
 
@@ -237,13 +237,13 @@ Certain transcripts are handled locally without reaching the agent:
 
 Matching is fuzzy (lowercased, trimmed, checked against patterns). Configurable via `opts.voice_commands`.
 
-### ACP Messages (what lazyspeak sends/receives)
+### ACP Messages (what outloud sends/receives)
 
 These follow the stable ACP v1 wire format (`protocolVersion: 1`). There is no
 `initialized` handshake — after the `initialize` response the client proceeds
 straight to `session/new`.
 
-**lazyspeak → Agent:**
+**outloud → Agent:**
 ```json
 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
   "protocolVersion": 1,
@@ -265,11 +265,11 @@ straight to `session/new`.
 ```
 
 The `initialize` response carries `agentCapabilities.promptCapabilities`
-(`{image, audio, embeddedContext}`). Claude advertises no `audio`, so lazyspeak
+(`{image, audio, embeddedContext}`). Claude advertises no `audio`, so outloud
 always sends a `text` content block; an audio-capable agent (e.g. Gemini) could
 receive an `audio` block instead.
 
-**Agent → lazyspeak (requests, expect a response):**
+**Agent → outloud (requests, expect a response):**
 ```json
 {"jsonrpc": "2.0", "id": 10, "method": "fs/read_text_file", "params": {
   "path": "/absolute/path/to/file.lua"
@@ -294,7 +294,7 @@ receive an `audio` block instead.
 //   (or {"outcome": {"outcome": "cancelled"}})
 ```
 
-**Agent → lazyspeak (notifications, no response):**
+**Agent → outloud (notifications, no response):**
 ```json
 {"jsonrpc": "2.0", "method": "session/update", "params": {
   "sessionId": "abc-123",
@@ -323,7 +323,7 @@ The `session/prompt` response (not a notification) carries the turn's
 ### Agent Configuration
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   agent = {
     -- Adapter: "claudecode" (default) or "acp"
     adapter = "claudecode",
@@ -364,7 +364,7 @@ Reserved in `defaults.keys` but not yet bound: `toggle_listen` (`<leader>lS`),
 
 ### Status Line
 
-`require("lazyspeak").status()` returns:
+`require("outloud").status()` returns:
 
 | State | Display |
 |-------|---------|
@@ -417,7 +417,7 @@ would not work from wherever the cursor is. `?` and `q` are local to the sidebar
 window and are labelled as such in the reference block.
 
 **Discovery.** The key reference occupies the conversation region until the first
-entry arrives, then gives way to it. `?` (or `:LazySpeakHelp`) brings it back
+entry arrives, then gives way to it. `?` (or `:OutLoudHelp`) brings it back
 above the conversation without disturbing the entries.
 
 **Conversation.** Held as a list of typed entries, not appended text. That is
@@ -435,8 +435,8 @@ ask and the resolution as a single entry.
 
 | Action | Sidebar window | Conversation buffer | Daemon |
 |--------|---------------|--------------------|--------|
-| `<Esc>` / `:LazySpeakDismiss` | closed | kept | running |
-| `:LazySpeakStop` | closed | deleted | stopped |
+| `<Esc>` / `:OutLoudDismiss` | closed | kept | running |
+| `:OutLoudStop` | closed | deleted | stopped |
 | Exit Neovim (`VimLeavePre`) | closed | deleted | stopped |
 
 Shutdown is wired to `VimLeavePre`, so quitting never strands the daemon,
@@ -446,23 +446,23 @@ Shutdown is wired to `VimLeavePre`, so quitting never strands the daemon,
 
 | Command | Description |
 |---------|-------------|
-| `:LazySpeakStart` | Start daemon + agent |
-| `:LazySpeakStop` | Stop everything and tear down the UI |
-| `:LazySpeakStatus` | Show daemon/agent/model status |
-| `:LazySpeakSidebar` | Toggle the session sidebar |
-| `:LazySpeakHelp` | Toggle the key reference in the sidebar |
-| `:LazySpeakDismiss` | Hide the sidebar, leave the daemon running |
-| `:LazySpeakUndo` | Revert last agent edit |
-| `:LazySpeakSnapshots` | List snapshots for current session |
-| `:LazySpeakSnapshotsPrune` | Drop orphaned `lazyspeak:` stash entries |
-| `:LazySpeakInstall` | Build and install the daemon binary |
+| `:OutLoudStart` | Start daemon + agent |
+| `:OutLoudStop` | Stop everything and tear down the UI |
+| `:OutLoudStatus` | Show daemon/agent/model status |
+| `:OutLoudSidebar` | Toggle the session sidebar |
+| `:OutLoudHelp` | Toggle the key reference in the sidebar |
+| `:OutLoudDismiss` | Hide the sidebar, leave the daemon running |
+| `:OutLoudUndo` | Revert last agent edit |
+| `:OutLoudSnapshots` | List snapshots for current session |
+| `:OutLoudSnapshotsPrune` | Drop orphaned `outloud:` stash entries |
+| `:OutLoudInstall` | Build and install the daemon binary |
 
-Planned, not yet implemented: `:LazySpeakHistory`, `:LazySpeakAgent [cmd]`.
+Planned, not yet implemented: `:OutLoudHistory`, `:OutLoudAgent [cmd]`.
 
 ## Configuration
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   -- Agent adapter
   agent = {
     adapter = "claudecode",  -- "claudecode" | "acp"
@@ -474,7 +474,7 @@ require("lazyspeak").setup({
 
   -- STT model
   model = {
-    path = "~/.local/share/lazyspeak/voxtral-mini-3b-q4_k_m.gguf",
+    path = "~/.local/share/outloud/voxtral-mini-3b-q4_k_m.gguf",
     server_port = 8674,
     -- or connect to existing server:
     -- server_url = "http://127.0.0.1:8080",
@@ -551,7 +551,7 @@ Plugin ↔ Rust daemon over stdin/stdout JSON lines.
 
 | Dependency | Purpose | Size | License |
 |---|---|---|---|
-| `lazyspeak` binary (Rust) | Mic capture, VAD, STT dispatch | ~5 MB | Apache 2.0 |
+| `outloud` binary (Rust) | Mic capture, VAD, STT dispatch | ~5 MB | Apache 2.0 |
 | Voxtral Mini 3B Q4 GGUF | Speech-to-text model | ~2.5 GB | Apache 2.0 |
 | `llama-server` (llama.cpp) | Local model inference server | ~50 MB | MIT |
 | An ACP agent or Claude CLI | Coding intelligence | varies | varies |
@@ -573,24 +573,24 @@ Plugin ↔ Rust daemon over stdin/stdout JSON lines.
 
 ```lua
 {
-  "urmzd/lazyspeak.nvim",
-  build = ":LazySpeakInstall",
+  "urmzd/outloud.nvim",
+  build = ":OutLoudInstall",
   opts = {
     agent = { adapter = "claudecode" },
   },
 }
 ```
 
-### 2. `:LazySpeakInstall` automates:
+### 2. `:OutLoudInstall` automates:
 
-- Downloads Voxtral GGUF model (~2.5 GB) to `~/.local/share/lazyspeak/`
-- Builds and installs the `lazyspeak` daemon binary via `cargo install`
+- Downloads Voxtral GGUF model (~2.5 GB) to `~/.local/share/outloud/`
+- Builds and installs the `outloud` daemon binary via `cargo install`
 
 ### 3. Manual install (alternative)
 
 ```sh
 # Build daemon
-cargo install --path crates/lazyspeak
+cargo install --path crates/outloud
 
 # Download model
 just download-model
@@ -599,11 +599,11 @@ just download-model
 ## File Structure
 
 ```
-lazyspeak.nvim/
+outloud.nvim/
 ├── Cargo.toml                -- workspace root
 ├── Justfile                  -- dev tasks
 ├── crates/
-│   └── lazyspeak/            -- lib + binary
+│   └── outloud/            -- lib + binary
 │       └── src/
 │           ├── lib.rs        -- public modules: audio, protocol, transcribe, pipeline
 │           ├── main.rs       -- daemon entry point, event loop
@@ -612,20 +612,20 @@ lazyspeak.nvim/
 │           ├── transcribe/   -- STT backends
 │           └── pipeline/     -- streamsafe pipeline stages
 ├── lua/
-│   └── lazyspeak/
+│   └── outloud/
 │       ├── init.lua          -- setup(), public API, keybindings
 │       ├── voice.lua         -- spawn/manage Rust daemon (jobstart)
 │       ├── core.lua          -- IR types, voice command interception, adapter dispatch
 │       ├── snapshot.lua      -- git stash snapshots, undo/revert
-│       ├── install.lua       -- :LazySpeakInstall (model download + cargo build)
+│       ├── install.lua       -- :OutLoudInstall (model download + cargo build)
 │       ├── adapters/
 │       │   ├── acp.lua       -- ACP adapter (JSON-RPC 2.0 / stdio)
 │       │   └── claudecode.lua -- Claude Code adapter (CLI pipe)
 │       ├── sidebar.lua       -- status header + conversation
 │       ├── ui.lua            -- statusline component
-│       └── health.lua        -- :checkhealth lazyspeak
+│       └── health.lua        -- :checkhealth outloud
 ├── plugin/
-│   └── lazyspeak.vim         -- command definitions
+│   └── outloud.vim         -- command definitions
 ├── SPEC.md
 ├── LICENSE                   -- Apache 2.0
 └── .gitignore

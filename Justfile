@@ -51,14 +51,14 @@ ci: fmt-check lint build test
 
 # Install the daemon binary
 install-bin:
-    cargo install --path crates/lazyspeak
+    cargo install --path crates/outloud
 
 # Run daemon in dev mode
 daemon-dev:
-    cargo run --bin lazyspeak
+    cargo run --bin outloud
 
 # Test Neovim plugin loads
 nvim-dev:
-    nvim --cmd 'set rtp+=.' -c 'lua require("lazyspeak").setup()'
+    nvim --cmd 'set rtp+=.' -c 'lua require("outloud").setup()'
 
 

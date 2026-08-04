@@ -1,6 +1,6 @@
 #!/usr/bin/env -S nvim --headless -l
 
--- Headless verification script for lazyspeak.nvim
+-- Headless verification script for outloud.nvim
 -- Run: nvim --headless -l tests/verify.lua
 
 -- Add project lua/ directory to package.path so modules are discoverable
@@ -26,19 +26,19 @@ local function section(name)
   print(string.format("\n=== %s ===", name))
 end
 
-print("lazyspeak.nvim headless verification")
+print("outloud.nvim headless verification")
 print(string.rep("=", 40))
 
 -- 1. Module loading
 section("Module Loading")
 
 local modules = {
-  "lazyspeak",
-  "lazyspeak.voice",
-  "lazyspeak.sidebar",
-  "lazyspeak.ui",
-  "lazyspeak.install",
-  "lazyspeak.health",
+  "outloud",
+  "outloud.voice",
+  "outloud.sidebar",
+  "outloud.ui",
+  "outloud.install",
+  "outloud.health",
 }
 
 for _, mod_path in ipairs(modules) do
@@ -50,10 +50,10 @@ end
 section("Deleted Modules (should not load)")
 
 local deleted = {
-  "lazyspeak.core",
-  "lazyspeak.snapshot",
-  "lazyspeak.adapters.acp",
-  "lazyspeak.adapters.claudecode",
+  "outloud.core",
+  "outloud.snapshot",
+  "outloud.adapters.acp",
+  "outloud.adapters.claudecode",
 }
 
 for _, mod_path in ipairs(deleted) do
@@ -64,7 +64,7 @@ end
 -- 2. Public API surface
 section("Public API")
 
-local ls = require("lazyspeak")
+local ls = require("outloud")
 
 local required_methods = {
   "setup",
@@ -75,7 +75,7 @@ local required_methods = {
 }
 
 for _, method in ipairs(required_methods) do
-  assert_ok(type(ls[method]) == "function", string.format("lazyspeak.%s()", method))
+  assert_ok(type(ls[method]) == "function", string.format("outloud.%s()", method))
 end
 
 -- Config structure
@@ -93,7 +93,7 @@ assert_ok(ls.defaults.agent == nil, "defaults.agent removed (no ACP)")
 -- 3. Voice class
 section("Voice Daemon")
 
-local Voice = require("lazyspeak.voice").Voice
+local Voice = require("outloud.voice").Voice
 assert_ok(type(Voice) == "table", "Voice class exists")
 assert_ok(type(Voice.new) == "function", "Voice:new()")
 assert_ok(type(Voice.start) == "function", "Voice:start()")
@@ -106,7 +106,7 @@ assert_ok(type(Voice.on_partial) == "function", "Voice:on_partial()")
 --- 4. Sidebar class
 section("Sidebar UI")
 
-local Sidebar = require("lazyspeak.sidebar").Sidebar
+local Sidebar = require("outloud.sidebar").Sidebar
 assert_ok(type(Sidebar) == "table", "Sidebar class exists")
 assert_ok(type(Sidebar.new) == "function", "Sidebar:new()")
 assert_ok(type(Sidebar.open) == "function", "Sidebar:open()")
@@ -134,7 +134,7 @@ assert_ok(sb.status.daemon ~= nil, "sidebar status has daemon key")
 -- 5. Install module
 section("Install / STT Server")
 
-local install = require("lazyspeak.install")
+local install = require("outloud.install")
 assert_ok(type(install.run) == "function", "install.run()")
 assert_ok(type(install.start_llama_server) == "function", "install.start_llama_server()")
 assert_ok(type(install.stop_llama_server) == "function", "install.stop_llama_server()")
@@ -146,7 +146,7 @@ section("Health Check")
 
 -- Health check should not error
 local ok, err = pcall(function()
-  require("lazyspeak.health").check()
+  require("outloud.health").check()
 end)
 assert_ok(ok, "health.check() runs without error", err)
 
@@ -167,7 +167,7 @@ assert_ok(ls.config.accumulator.enabled == false, "accumulator disabled by defau
 -- 8. Accumulator module
 section("Accumulator")
 
-local Accumulator = require("lazyspeak.accumulator").Accumulator
+local Accumulator = require("outloud.accumulator").Accumulator
 assert_ok(type(Accumulator) == "table", "Accumulator class exists")
 assert_ok(type(Accumulator.new) == "function", "Accumulator:new()")
 assert_ok(type(Accumulator.append) == "function", "Accumulator:append()")
@@ -191,9 +191,9 @@ acc:dispose()
 -- 9. Public API for accumulator commands
 section("Accumulator API")
 
-assert_ok(type(ls.confirm_accumulator) == "function", "lazyspeak.confirm_accumulator()")
-assert_ok(type(ls.cancel_accumulator) == "function", "lazyspeak.cancel_accumulator()")
-assert_ok(type(ls.clear_accumulator) == "function", "lazyspeak.clear_accumulator()")
+assert_ok(type(ls.confirm_accumulator) == "function", "outloud.confirm_accumulator()")
+assert_ok(type(ls.cancel_accumulator) == "function", "outloud.cancel_accumulator()")
+assert_ok(type(ls.clear_accumulator) == "function", "outloud.clear_accumulator()")
 
 -- Summary
 section("Results")

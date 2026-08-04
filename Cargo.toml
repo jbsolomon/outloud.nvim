@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/lazyspeak"]
+members = ["crates/outloud"]
 
 [workspace.package]
 version = "0.6.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/urmzd/lazyspeak.nvim"
+repository = "https://github.com/urmzd/outloud.nvim"
 
 [workspace.dependencies]
 streamsafe = { version = "0.2", default-features = false }

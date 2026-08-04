@@ -86,16 +86,16 @@ mod tests {
         drop(event_rx);
 
         // Sending should fail
-        let result = sink.consume(Event::Transcript {
-            text: "hello".into(),
-            duration_ms: 100,
-        })
-        .await;
+        let result = sink
+            .consume(Event::Transcript {
+                text: "hello".into(),
+                duration_ms: 100,
+            })
+            .await;
 
         assert!(result.is_err());
     }
 }
-
 
 impl Sink for EventSink {
     type Input = Event;

@@ -14,7 +14,7 @@ local M = {}
 --- Orthogonal to sliding window mode — you can use accumulator alone or
 --- combined with sliding window partials.
 ---
----@class lazyspeak.Accumulator
+---@class outloud.Accumulator
 ---@field buf number?           temp buffer holding accumulated text
 ---@field win number?           optional window for the accumulator preview
 ---@field chunks string[]       raw transcript chunks in order
@@ -55,7 +55,7 @@ Return only the updated scratch pad content. Do not include explanations or mark
 }
 
 ---@param opts? table
----@return lazyspeak.Accumulator
+---@return outloud.Accumulator
 function Accumulator:new(opts)
 	opts = vim.tbl_deep_extend("force", {}, DEFAULT_OPTS, opts or {})
 	return setmetatable({
@@ -215,7 +215,7 @@ function Accumulator:iterate(utterance, on_complete)
 	if handler and handler.name then
 		local ok, cc = pcall(require, "CodeCompanion")
 		if ok and cc.chat then
-			vim.notify("[lazyspeak] scratchpad: refining with CodeCompanion", vim.log.levels.INFO)
+			vim.notify("[outloud] scratchpad: refining with CodeCompanion", vim.log.levels.INFO)
 			cc.chat({
 				handler = handler.name,
 				message = prompt,
@@ -295,7 +295,7 @@ end
 ---@param on_complete? fun(text: string) callback with the handler result
 function Accumulator:confirm(on_complete)
 	if self.text == "" then
-		vim.notify("[lazyspeak] accumulator is empty", vim.log.levels.WARN)
+		vim.notify("[outloud] accumulator is empty", vim.log.levels.WARN)
 		return
 	end
 
@@ -308,7 +308,7 @@ function Accumulator:confirm(on_complete)
 		local ok, cc = pcall(require, "CodeCompanion")
 		if ok then
 			-- CodeCompanion is available — use it
-			vim.notify("[lazyspeak] sending to CodeCompanion handler: " .. handler.name, vim.log.levels.INFO)
+			vim.notify("[outloud] sending to CodeCompanion handler: " .. handler.name, vim.log.levels.INFO)
 			-- CodeCompanion integration: send prompt and apply response
 			-- This is a best-effort integration since CodeCompanion APIs vary
 			local function apply_response(response)
@@ -356,7 +356,7 @@ function Accumulator:confirm(on_complete)
 	end
 
 	-- No handler configured — direct insertion fallback
-	vim.notify("[lazyspeak] no handler configured, inserting directly", vim.log.levels.INFO)
+	vim.notify("[outloud] no handler configured, inserting directly", vim.log.levels.INFO)
 	self:_insert_at_cursor(self.text)
 	if on_complete then
 		on_complete(self.text)
@@ -409,7 +409,7 @@ function Accumulator:open_preview()
 	vim.api.nvim_win_set_width(self.win, self.opts.width)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = self.buf })
 	vim.api.nvim_set_option_value("buftype", "nofile", { buf = self.buf })
-	vim.api.nvim_set_option_value("filetype", "lazyspeak-accum", { buf = self.buf })
+	vim.api.nvim_set_option_value("filetype", "outloud-accum", { buf = self.buf })
 	vim.api.nvim_set_option_value("wrap", true, { win = self.win })
 
 	if not vim.api.nvim_win_is_valid(prev) then
@@ -432,7 +432,7 @@ function Accumulator:_ensure_buf()
 		return
 	end
 	self.buf = vim.api.nvim_create_buf(false, true)
-	pcall(vim.api.nvim_buf_set_name, self.buf, "lazyspeak://accumulator")
+	pcall(vim.api.nvim_buf_set_name, self.buf, "outloud://accumulator")
 	vim.api.nvim_set_option_value("buftype", "nofile", { buf = self.buf })
 	vim.api.nvim_set_option_value("swapfile", false, { buf = self.buf })
 	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = self.buf })

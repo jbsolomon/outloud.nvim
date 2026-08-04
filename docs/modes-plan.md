@@ -54,13 +54,13 @@ Each request is roughly the same size (~5s of audio). Constant cost. No wasted r
 
 #### Daemon (Rust)
 
-**`crates/lazyspeak/src/audio.rs`**
+**`crates/outloud/src/audio.rs`**
 - Replace `partial_gate` with a **sliding window buffer**: maintain a ring buffer of audio samples
 - Window size configurable via `LAZYSPEAK_WINDOW_MS` (default 5000ms)
 - On partial emission, extract only the window's worth of audio (not the full buffer)
 - Remove the "clone entire buffer" approach; instead slice the ring buffer
 
-**`crates/lazyspeak/src/protocol.rs`**
+**`crates/outloud/src/protocol.rs`**
 - Extend `Partial` event with window metadata:
   ```rust
   Partial {
@@ -73,24 +73,24 @@ Each request is roughly the same size (~5s of audio). Constant cost. No wasted r
 - `window_start_ms` / `window_end_ms` allow the plugin to understand which portion of the utterance this partial covers
 - `seq` ensures ordering when results arrive out of order
 
-**`crates/lazyspeak/src/pipeline/transform.rs`**
+**`crates/outloud/src/pipeline/transform.rs`**
 - Remove `GateGuard` — with sliding windows, each partial is independent and same-cost
 - Keep single-in-flight for simplicity, but no gate blocking — if one is in-flight, drop the new partial (latest wins)
 - Pass window metadata through to `Event::Partial`
 
-**`crates/lazyspeak/src/main.rs`**
+**`crates/outloud/src/main.rs`**
 - Read `LAZYSPEAK_WINDOW_MS` env var (default 5000)
 - Pass to audio capture for window sizing
 
 #### Plugin (Lua)
 
-**`lua/lazyspeak/voice.lua`**
+**`lua/outloud/voice.lua`**
 - `on_partial` callback now receives `(text, window_start_ms, window_end_ms, seq)`
 - Track the **insertion range** in the buffer: which lines/columns correspond to the current partial text
 - On new partial, replace only the tracked range with the new text
 - Maintain a simple ordered delivery: if `seq` is older than last displayed, discard
 
-**`lua/lazyspeak/init.lua`**
+**`lua/outloud/init.lua`**
 - New config in `audio` section:
   ```lua
   audio = {
@@ -102,7 +102,7 @@ Each request is roughly the same size (~5s of audio). Constant cost. No wasted r
 - Build env var: `LAZYSPEAK_WINDOW_MS`
 - On final transcript (`Utterance` event), replace the partial insertion range with the complete transcript
 
-**`lua/lazyspeak/sidebar.lua`**
+**`lua/outloud/sidebar.lua`**
 - Already has `set_partial()` — receives partials from voice module
 - No changes needed for display; the sidebar shows the latest partial text
 
@@ -120,7 +120,7 @@ This avoids stitching weirdness because each partial is self-contained (the wind
 ### Configuration
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   audio = {
     -- ... existing ...
     window_ms = 5000,        -- sliding window size (5 seconds)
@@ -214,12 +214,12 @@ The user can say "add a function", then "no, delete that line", and the LLM eval
 
 #### Plugin (Lua)
 
-**`lua/lazyspeak/accumulator.lua`** *(new module)*
+**`lua/outloud/accumulator.lua`** *(new module)*
 
 The accumulator manages the temp buffer, accumulated text, and the CodeCompanion integration.
 
 ```lua
----@class lazyspeak.Accumulator
+---@class outloud.Accumulator
 ---@field buf number?           -- the temp buffer holding accumulated text
 ---@field win number?           -- optional window for the accumulator
 ---@field chunks string[]       -- raw chunks in order
@@ -237,7 +237,7 @@ Key methods:
 - `Accumulator:cancel()` — discard the accumulation
 - `Accumulator:dispose()` — clean up buffer/window
 
-**`lua/lazyspeak/init.lua`**
+**`lua/outloud/init.lua`**
 
 New config section:
 ```lua
@@ -262,7 +262,7 @@ accumulator = {
     mode = "hidden",           -- "hidden" | "preview" | "sidebar"
     -- "hidden": no visible buffer, accumulation is internal
     -- "preview": temp buffer shown in a split
-    -- "sidebar": accumulated text shown in the lazyspeak sidebar
+    -- "sidebar": accumulated text shown in the outloud sidebar
   },
 },
 ```
@@ -272,13 +272,13 @@ New commands:
 - `:VoiceCancelBuf` — cancel and discard the accumulation
 - `:VoiceClearBuf` — clear the accumulation without cancelling
 
-**`lua/lazyspeak/sidebar.lua`**
+**`lua/outloud/sidebar.lua`**
 
 - New entry kind `"accumulation"` — shows the accumulated text in the sidebar
 - `Sidebar:set_accumulation(text)` — update the accumulation entry
 - `Sidebar:clear_accumulation()` — remove the accumulation entry
 
-**`plugin/lazyspeak.vim`**
+**`plugin/outloud.vim`**
 
 - Add `:VoiceConfirmBuf` and `:VoiceCancelBuf` commands
 
@@ -388,7 +388,7 @@ end
 ### Configuration
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   accumulator = {
     enabled = true,
     handler = {
@@ -446,7 +446,7 @@ When both are enabled, sliding window chunks feed into the scratchpad buffer, gi
 
 ### Phase 2: Accumulator Mode (Plugin Only) ✅ DONE
 
-1. **New module**: `lua/lazyspeak/accumulator.lua` — accumulator module with classic + scratchpad modes
+1. **New module**: `lua/outloud/accumulator.lua` — accumulator module with classic + scratchpad modes
 2. **Config**: Add accumulator config section to `init.lua`
 3. **Commands**: `:VoiceConfirmBuf`, `:VoiceCancelBuf`, `:VoiceClearBuf`
 4. **CodeCompanion integration**: Handler invocation with context
@@ -479,21 +479,21 @@ When both are enabled, sliding window chunks feed into the scratchpad buffer, gi
 ## File Changes Summary
 
 ### New Files
-- `lua/lazyspeak/accumulator.lua` — accumulator module (classic + scratchpad modes)
+- `lua/outloud/accumulator.lua` — accumulator module (classic + scratchpad modes)
 
 ### Modified Files
-- `lua/lazyspeak/init.lua` — config, wiring, commands, scratchpad iteration on transcript
-- `lua/lazyspeak/voice.lua` — partial callbacks with insertion range tracking
-- `plugin/lazyspeak.vim` — new commands (`:VoiceConfirmBuf`, `:VoiceCancelBuf`, `:VoiceClearBuf`)
+- `lua/outloud/init.lua` — config, wiring, commands, scratchpad iteration on transcript
+- `lua/outloud/voice.lua` — partial callbacks with insertion range tracking
+- `plugin/outloud.vim` — new commands (`:VoiceConfirmBuf`, `:VoiceCancelBuf`, `:VoiceClearBuf`)
 - `tests/integration.lua` — tests for accumulator (sections 14, 14b, 15) + scratchpad (section 16)
 - `tests/verify.lua` — accumulator smoke tests + API checks
 
 ### Pending (Sliding Window)
-- `crates/lazyspeak/src/audio.rs` — sliding window ring buffer, remove full-buffer clone
-- `crates/lazyspeak/src/protocol.rs` — window metadata on `Partial` event
-- `crates/lazyspeak/src/pipeline/transform.rs` — remove `GateGuard`, latest-wins policy
-- `crates/lazyspeak/src/main.rs` — `LAZYSPEAK_WINDOW_MS` config
-- `lua/lazyspeak/sidebar.lua` — accumulation entry display
-- `lua/lazyspeak/health.lua` — check CodeCompanion availability
+- `crates/outloud/src/audio.rs` — sliding window ring buffer, remove full-buffer clone
+- `crates/outloud/src/protocol.rs` — window metadata on `Partial` event
+- `crates/outloud/src/pipeline/transform.rs` — remove `GateGuard`, latest-wins policy
+- `crates/outloud/src/main.rs` — `LAZYSPEAK_WINDOW_MS` config
+- `lua/outloud/sidebar.lua` — accumulation entry display
+- `lua/outloud/health.lua` — check CodeCompanion availability
 - `SPEC.md` — documentation update
 

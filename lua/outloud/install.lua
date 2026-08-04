@@ -7,22 +7,22 @@ local HF_REPO = "ggml-org/Voxtral-Mini-3B-2507-GGUF"
 --- Install daemon binary (model is auto-downloaded by llama-server via -hf).
 function M.run()
 	-- Build daemon binary
-	if vim.fn.executable("lazyspeak") == 0 then
-		vim.notify("[lazyspeak] building daemon binary...")
+	if vim.fn.executable("outloud") == 0 then
+		vim.notify("[outloud] building daemon binary...")
 		local plugin_dir = debug.getinfo(1, "S").source:match("@(.*/)")
 		if plugin_dir then
-			plugin_dir = plugin_dir:gsub("/lua/lazyspeak/$", "")
+			plugin_dir = plugin_dir:gsub("/lua/outloud/$", "")
 		end
 
 		if plugin_dir and vim.fn.isdirectory(plugin_dir .. "/crates") == 1 then
-			vim.fn.jobstart({ "cargo", "install", "--path", plugin_dir .. "/crates/lazyspeak" }, {
+			vim.fn.jobstart({ "cargo", "install", "--path", plugin_dir .. "/crates/outloud" }, {
 				on_exit = function(_, code, _)
 					vim.schedule(function()
 						if code == 0 then
-							vim.notify("[lazyspeak] daemon binary installed")
+							vim.notify("[outloud] daemon binary installed")
 						else
 							vim.notify(
-								"[lazyspeak] daemon build failed — run `cargo install --path crates/lazyspeak` manually",
+								"[outloud] daemon build failed — run `cargo install --path crates/outloud` manually",
 								vim.log.levels.ERROR
 							)
 						end
@@ -31,15 +31,15 @@ function M.run()
 			})
 		else
 			vim.notify(
-				"[lazyspeak] could not find crates/ dir — run `cargo install --path crates/lazyspeak` manually",
+				"[outloud] could not find crates/ dir — run `cargo install --path crates/outloud` manually",
 				vim.log.levels.WARN
 			)
 		end
 	else
-		vim.notify("[lazyspeak] daemon binary already installed")
+		vim.notify("[outloud] daemon binary already installed")
 	end
 
-	vim.notify("[lazyspeak] model will be auto-downloaded on first :LazySpeakStart via llama-server -hf " .. HF_REPO)
+	vim.notify("[outloud] model will be auto-downloaded on first :LazySpeakStart via llama-server -hf " .. HF_REPO)
 end
 
 -- llama-server process management
@@ -79,7 +79,7 @@ function M.probe_server(port, cb)
 	end)
 	if not ok then
 		vim.schedule(function()
-			vim.notify("[lazyspeak] health probe failed to spawn: " .. tostring(err), vim.log.levels.WARN)
+			vim.notify("[outloud] health probe failed to spawn: " .. tostring(err), vim.log.levels.WARN)
 			cb(false)
 		end)
 	end
@@ -111,7 +111,7 @@ function M.start_llama_server(opts, on_ready)
 	-- Something else may already be listening on the port.
 	M.probe_server(port, function(alive)
 		if alive then
-			vim.notify("[lazyspeak] llama-server already running on port " .. port)
+			vim.notify("[outloud] llama-server already running on port " .. port)
 			on_phase("ready")
 			if on_ready then
 				on_ready()
@@ -131,14 +131,14 @@ end
 function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 	if vim.fn.executable("llama-server") ~= 1 then
 		vim.notify(
-			"[lazyspeak] llama-server not found — install llama.cpp (brew install llama.cpp)",
+			"[outloud] llama-server not found — install llama.cpp (brew install llama.cpp)",
 			vim.log.levels.ERROR
 		)
 		on_phase("error", "llama-server not installed")
 		return
 	end
 
-	vim.notify("[lazyspeak] starting llama-server on port " .. port .. " (model: " .. hf_repo .. ")...")
+	vim.notify("[outloud] starting llama-server on port " .. port .. " (model: " .. hf_repo .. ")...")
 
 	local phase = "starting"
 	local last_progress = vim.uv.now()
@@ -186,14 +186,14 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 			M._llama_job_id = nil
 			if code ~= 0 then
 				vim.schedule(function()
-					vim.notify("[lazyspeak] llama-server exited with code " .. code, vim.log.levels.WARN)
+					vim.notify("[outloud] llama-server exited with code " .. code, vim.log.levels.WARN)
 				end)
 			end
 		end,
 	})
 
 	if M._llama_job_id <= 0 then
-		vim.notify("[lazyspeak] failed to start llama-server", vim.log.levels.ERROR)
+		vim.notify("[outloud] failed to start llama-server", vim.log.levels.ERROR)
 		M._llama_job_id = nil
 		on_phase("error", "failed to spawn llama-server")
 		return
@@ -215,13 +215,13 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 			timer:close()
 		end
 		if ok then
-			vim.notify("[lazyspeak] llama-server ready")
+			vim.notify("[outloud] llama-server ready")
 			on_phase("ready")
 			if on_ready then
 				on_ready()
 			end
 		else
-			vim.notify("[lazyspeak] " .. (message or "llama-server failed"), vim.log.levels.ERROR)
+			vim.notify("[outloud] " .. (message or "llama-server failed"), vim.log.levels.ERROR)
 			on_phase("error", message)
 		end
 	end

@@ -4,157 +4,157 @@
 
 ### Features
 
-- session sidebar, non-blocking probe, and snapshot store rework (#7) ([2eb2bd1](https://github.com/urmzd/lazyspeak.nvim/commit/2eb2bd1b4f41caca94e47cd82763cf8fa7f5cff1))
+- session sidebar, non-blocking probe, and snapshot store rework (#7) ([2eb2bd1](https://github.com/urmzd/outloud.nvim/commit/2eb2bd1b4f41caca94e47cd82763cf8fa7f5cff1))
 
 ### Misc
 
-- bump GitHub Actions to Node 24 majors and switch app token to client-id ([483bd57](https://github.com/urmzd/lazyspeak.nvim/commit/483bd57672f1546178a159f772baea265145f61e))
+- bump GitHub Actions to Node 24 majors and switch app token to client-id ([483bd57](https://github.com/urmzd/outloud.nvim/commit/483bd57672f1546178a159f772baea265145f61e))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.5.0...v0.6.0)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.5.0...v0.6.0)
 
 
 ## 0.5.0 (2026-05-30)
 
 ### Features
 
-- realtime voice over ACP with Claude Code bridge (#6) ([bf956ce](https://github.com/urmzd/lazyspeak.nvim/commit/bf956ce3a42c7510dc6a29012301906eaa12fc8e))
+- realtime voice over ACP with Claude Code bridge (#6) ([bf956ce](https://github.com/urmzd/outloud.nvim/commit/bf956ce3a42c7510dc6a29012301906eaa12fc8e))
 
 ### Misc
 
-- **ci**: bump sr to v8, convert post_release hook to typed cargo publisher ([118e2e0](https://github.com/urmzd/lazyspeak.nvim/commit/118e2e0e54432fd3bb3865683f9dd8804df94079))
-- **ci**: remove unused force input from release workflow ([eda092b](https://github.com/urmzd/lazyspeak.nvim/commit/eda092b22b4ea536cb6f164f72911021198e652f))
-- **community**: add GitHub community-health files ([87e2f76](https://github.com/urmzd/lazyspeak.nvim/commit/87e2f76a00c8dd87826beb002401d7db36222207))
-- **fix**: standardize README header ([1ab8fff](https://github.com/urmzd/lazyspeak.nvim/commit/1ab8fff9b6ca5f930cf08afdd01564a194d591a5))
+- **ci**: bump sr to v8, convert post_release hook to typed cargo publisher ([118e2e0](https://github.com/urmzd/outloud.nvim/commit/118e2e0e54432fd3bb3865683f9dd8804df94079))
+- **ci**: remove unused force input from release workflow ([eda092b](https://github.com/urmzd/outloud.nvim/commit/eda092b22b4ea536cb6f164f72911021198e652f))
+- **community**: add GitHub community-health files ([87e2f76](https://github.com/urmzd/outloud.nvim/commit/87e2f76a00c8dd87826beb002401d7db36222207))
+- **fix**: standardize README header ([1ab8fff](https://github.com/urmzd/outloud.nvim/commit/1ab8fff9b6ca5f930cf08afdd01564a194d591a5))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.4...v0.5.0)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.4.4...v0.5.0)
 
 
 ## 0.4.4 (2026-04-19)
 
 ### Refactoring
 
-- move cargo publish into sr hooks.post_release ([6b5a0f6](https://github.com/urmzd/lazyspeak.nvim/commit/6b5a0f6bb553d8bd70972beab870308f71b1e668))
+- move cargo publish into sr hooks.post_release ([6b5a0f6](https://github.com/urmzd/outloud.nvim/commit/6b5a0f6bb553d8bd70972beab870308f71b1e668))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.3...v0.4.4)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.4.3...v0.4.4)
 
 
 ## 0.4.3 (2026-04-16)
 
 ### Bug Fixes
 
-- **ci**: migrate sr v4 to v7 for artifact and input support (#5) ([a7ac35e](https://github.com/urmzd/lazyspeak.nvim/commit/a7ac35ed4bf5ffabdda854344a40244a62577ea4))
+- **ci**: migrate sr v4 to v7 for artifact and input support (#5) ([a7ac35e](https://github.com/urmzd/outloud.nvim/commit/a7ac35ed4bf5ffabdda854344a40244a62577ea4))
 
 ### Misc
 
-- migrate sr config and action to v4 ([bd95646](https://github.com/urmzd/lazyspeak.nvim/commit/bd956464d5eacde5c95af25ab159b093c6843b90))
+- migrate sr config and action to v4 ([bd95646](https://github.com/urmzd/outloud.nvim/commit/bd956464d5eacde5c95af25ab159b093c6843b90))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.2...v0.4.3)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.4.2...v0.4.3)
 
 
 ## 0.4.2 (2026-04-10)
 
 ### Bug Fixes
 
-- update streamsafe to 0.2 and commit Cargo.lock ([e7b1839](https://github.com/urmzd/lazyspeak.nvim/commit/e7b183911e2e0d7127b490ab08caf6cd0bd21a8e))
-- **ci**: remove --allow-dirty from cargo publish ([e14d7ae](https://github.com/urmzd/lazyspeak.nvim/commit/e14d7aece987d201745b05fd945506ef15efbe1c))
-- add version to streamsafe dependency for crates.io publishing ([7ddb7f2](https://github.com/urmzd/lazyspeak.nvim/commit/7ddb7f266bf0e4ea3c2fd4f878c35187e029ce8b))
+- update streamsafe to 0.2 and commit Cargo.lock ([e7b1839](https://github.com/urmzd/outloud.nvim/commit/e7b183911e2e0d7127b490ab08caf6cd0bd21a8e))
+- **ci**: remove --allow-dirty from cargo publish ([e14d7ae](https://github.com/urmzd/outloud.nvim/commit/e14d7aece987d201745b05fd945506ef15efbe1c))
+- add version to streamsafe dependency for crates.io publishing ([7ddb7f2](https://github.com/urmzd/outloud.nvim/commit/7ddb7f266bf0e4ea3c2fd4f878c35187e029ce8b))
 
 ### Documentation
 
-- add project roadmap with ecosystem research ([a9830c9](https://github.com/urmzd/lazyspeak.nvim/commit/a9830c9c0b1ec76b28f4b0f7f7f3e646084dbaa8))
+- add project roadmap with ecosystem research ([a9830c9](https://github.com/urmzd/outloud.nvim/commit/a9830c9c0b1ec76b28f4b0f7f7f3e646084dbaa8))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.1...v0.4.2)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.4.1...v0.4.2)
 
 
 ## 0.4.1 (2026-04-09)
 
 ### Documentation
 
-- add LICENSE and README to sub-crate for publishing compliance ([336eeff](https://github.com/urmzd/lazyspeak.nvim/commit/336eeff41f27064dd81c6bdd83420988534f6d75))
-- **spec**: update architecture documentation ([93c4c56](https://github.com/urmzd/lazyspeak.nvim/commit/93c4c56fbd6f93b9b46aaf9f047ee7c594b99556))
+- add LICENSE and README to sub-crate for publishing compliance ([336eeff](https://github.com/urmzd/outloud.nvim/commit/336eeff41f27064dd81c6bdd83420988534f6d75))
+- **spec**: update architecture documentation ([93c4c56](https://github.com/urmzd/outloud.nvim/commit/93c4c56fbd6f93b9b46aaf9f047ee7c594b99556))
 
 ### Refactoring
 
-- **main**: update entry point after crate consolidation ([9a92630](https://github.com/urmzd/lazyspeak.nvim/commit/9a926307e97787fa9ca91387aed0531317805033))
-- **lib**: move core library into main crate ([5313974](https://github.com/urmzd/lazyspeak.nvim/commit/531397450ca8f16770681a37d2a55563e82bc569))
-- **workspace**: consolidate lazyspeak-core into main crate ([ca0f76d](https://github.com/urmzd/lazyspeak.nvim/commit/ca0f76d073e7c42adb6143f79f475e06c47c8477))
+- **main**: update entry point after crate consolidation ([9a92630](https://github.com/urmzd/outloud.nvim/commit/9a926307e97787fa9ca91387aed0531317805033))
+- **lib**: move core library into main crate ([5313974](https://github.com/urmzd/outloud.nvim/commit/531397450ca8f16770681a37d2a55563e82bc569))
+- **workspace**: consolidate outloud-core into main crate ([ca0f76d](https://github.com/urmzd/outloud.nvim/commit/ca0f76d073e7c42adb6143f79f475e06c47c8477))
 
 ### Miscellaneous
 
-- fix cargo fmt import formatting ([da70048](https://github.com/urmzd/lazyspeak.nvim/commit/da7004822fe3941e8e59177a9d6151fba6e02de7))
-- **lazyspeak-core**: remove library module ([dd1bd13](https://github.com/urmzd/lazyspeak.nvim/commit/dd1bd13b5b988ed06050b76652685f3062d68a66))
-- **release**: remove lazyspeak-core publishing step ([bcf406e](https://github.com/urmzd/lazyspeak.nvim/commit/bcf406e6d7a127f9576af0b4f93b4bf27df95fe4))
+- fix cargo fmt import formatting ([da70048](https://github.com/urmzd/outloud.nvim/commit/da7004822fe3941e8e59177a9d6151fba6e02de7))
+- **outloud-core**: remove library module ([dd1bd13](https://github.com/urmzd/outloud.nvim/commit/dd1bd13b5b988ed06050b76652685f3062d68a66))
+- **release**: remove outloud-core publishing step ([bcf406e](https://github.com/urmzd/outloud.nvim/commit/bcf406e6d7a127f9576af0b4f93b4bf27df95fe4))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.4.0...v0.4.1)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.4.0...v0.4.1)
 
 
 ## 0.4.0 (2026-04-06)
 
 ### Features
 
-- **pipeline**: create modular streamsafe pipeline architecture ([d637c18](https://github.com/urmzd/lazyspeak.nvim/commit/d637c185fbc772a06ba77f1639c1d120d0dac249))
+- **pipeline**: create modular streamsafe pipeline architecture ([d637c18](https://github.com/urmzd/outloud.nvim/commit/d637c185fbc772a06ba77f1639c1d120d0dac249))
 
 ### Refactoring
 
-- **main**: migrate to async/tokio with pipeline pattern ([8831593](https://github.com/urmzd/lazyspeak.nvim/commit/8831593acb97f3eb9f91372a05f140b2ddc4a575))
+- **main**: migrate to async/tokio with pipeline pattern ([8831593](https://github.com/urmzd/outloud.nvim/commit/8831593acb97f3eb9f91372a05f140b2ddc4a575))
 
 ### Miscellaneous
 
-- **deps**: add streamsafe and tokio-util dependencies ([442cd96](https://github.com/urmzd/lazyspeak.nvim/commit/442cd96cd23b535fce4a199d8d595a60e4287a42))
-- add linguist overrides to fix language stats ([3f2b0f3](https://github.com/urmzd/lazyspeak.nvim/commit/3f2b0f38c7f36f1e921b6fa3c27842ccf1bb758f))
+- **deps**: add streamsafe and tokio-util dependencies ([442cd96](https://github.com/urmzd/outloud.nvim/commit/442cd96cd23b535fce4a199d8d595a60e4287a42))
+- add linguist overrides to fix language stats ([3f2b0f3](https://github.com/urmzd/outloud.nvim/commit/3f2b0f38c7f36f1e921b6fa3c27842ccf1bb758f))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.3.0...v0.4.0)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.3.0...v0.4.0)
 
 
 ## 0.3.0 (2026-04-05)
 
 ### Features
 
-- add teasr demo config (#3) ([6563cf2](https://github.com/urmzd/lazyspeak.nvim/commit/6563cf227ebceba6e77d0bcd648cd8c0711ce4f7))
+- add teasr demo config (#3) ([6563cf2](https://github.com/urmzd/outloud.nvim/commit/6563cf227ebceba6e77d0bcd648cd8c0711ce4f7))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.2.0...v0.3.0)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.2.0...v0.3.0)
 
 
 ## 0.2.0 (2026-04-04)
 
 ### Features
 
-- interactive push-to-talk UI, auto model download, and startup improvements (#2) ([073e9f8](https://github.com/urmzd/lazyspeak.nvim/commit/073e9f84922cc2aa6724fb23329e282221514d73))
+- interactive push-to-talk UI, auto model download, and startup improvements (#2) ([073e9f8](https://github.com/urmzd/outloud.nvim/commit/073e9f84922cc2aa6724fb23329e282221514d73))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.1.2...v0.2.0)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.1.2...v0.2.0)
 
 
 ## 0.1.2 (2026-04-03)
 
 ### Bug Fixes
 
-- **ci**: install libasound2-dev for publish verification ([531329a](https://github.com/urmzd/lazyspeak.nvim/commit/531329a13ba1e423c2bbed8ed6d6cc4a070942b4))
+- **ci**: install libasound2-dev for publish verification ([531329a](https://github.com/urmzd/outloud.nvim/commit/531329a13ba1e423c2bbed8ed6d6cc4a070942b4))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.1.1...v0.1.2)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.1.1...v0.1.2)
 
 
 ## 0.1.1 (2026-04-02)
 
 ### Bug Fixes
 
-- add version to lazyspeak-core workspace dependency ([4620c0b](https://github.com/urmzd/lazyspeak.nvim/commit/4620c0b7b991e19bbcca959f91f05edd4f8c86e6))
+- add version to outloud-core workspace dependency ([4620c0b](https://github.com/urmzd/outloud.nvim/commit/4620c0b7b991e19bbcca959f91f05edd4f8c86e6))
 
-[Full Changelog](https://github.com/urmzd/lazyspeak.nvim/compare/v0.1.0...v0.1.1)
+[Full Changelog](https://github.com/urmzd/outloud.nvim/compare/v0.1.0...v0.1.1)
 
 
 ## 0.1.0 (2026-04-02)
 
 ### Features
 
-- pluggable STT backends (HTTP + ONNX) via SpeechTranscriber trait ([b767ad0](https://github.com/urmzd/lazyspeak.nvim/commit/b767ad0b6a47464b0ebfa4f489f408343242e541))
-- **core**: auto-launch llama-server on plugin start ([6c4e25c](https://github.com/urmzd/lazyspeak.nvim/commit/6c4e25cd2b17141d21d666bcef7a5d450a4529f3))
-- **health**: validate llama-server installation ([15a0121](https://github.com/urmzd/lazyspeak.nvim/commit/15a01212726f5f8745408dba3f77de18ed5878ef))
-- **install**: add llama-server process management ([09e1fc4](https://github.com/urmzd/lazyspeak.nvim/commit/09e1fc4f42b8d3f8bd7f6ff7724119b9802ec508))
+- pluggable STT backends (HTTP + ONNX) via SpeechTranscriber trait ([b767ad0](https://github.com/urmzd/outloud.nvim/commit/b767ad0b6a47464b0ebfa4f489f408343242e541))
+- **core**: auto-launch llama-server on plugin start ([6c4e25c](https://github.com/urmzd/outloud.nvim/commit/6c4e25cd2b17141d21d666bcef7a5d450a4529f3))
+- **health**: validate llama-server installation ([15a0121](https://github.com/urmzd/outloud.nvim/commit/15a01212726f5f8745408dba3f77de18ed5878ef))
+- **install**: add llama-server process management ([09e1fc4](https://github.com/urmzd/outloud.nvim/commit/09e1fc4f42b8d3f8bd7f6ff7724119b9802ec508))
 
 ### Documentation
 
-- document llama-server auto-startup behavior ([078113f](https://github.com/urmzd/lazyspeak.nvim/commit/078113fb4ca657a0169f4c7dd453e6cc0068fdcd))
+- document llama-server auto-startup behavior ([078113f](https://github.com/urmzd/outloud.nvim/commit/078113fb4ca657a0169f4c7dd453e6cc0068fdcd))
 
 ### Miscellaneous
 
-- add sr release pipeline + refactor STT to llama-server (#1) ([53f5334](https://github.com/urmzd/lazyspeak.nvim/commit/53f5334c2b8de7225f2eb26e41db5b7205a65910))
+- add sr release pipeline + refactor STT to llama-server (#1) ([53f5334](https://github.com/urmzd/outloud.nvim/commit/53f5334c2b8de7225f2eb26e41db5b7205a65910))

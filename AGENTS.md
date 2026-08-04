@@ -1,13 +1,13 @@
 # AGENTS.md
 
-> Context file for AI agents working on **lazyspeak.nvim**.
+> Context file for AI agents working on **outloud.nvim**.
 > Read this before making changes. It summarises the project state, points to plans, and records architectural decisions.
 
 ---
 
 ## What This Project Is
 
-**lazyspeak.nvim** — a Neovim plugin for voice-driven coding.
+**outloud.nvim** — a Neovim plugin for voice-driven coding.
 
 ```
 Mic → Voxtral Mini 3B (local STT) → transcript → inserted at cursor
@@ -18,7 +18,7 @@ No cloud STT. No TTS. Local-only. You speak, text appears.
 
 **Current version:** 0.6.0 (July 2026)
 **License:** Apache 2.0
-**Repository:** github.com/urmzd/lazyspeak.nvim
+**Repository:** github.com/urmzd/outloud.nvim
 
 ---
 
@@ -37,7 +37,7 @@ What is **NOT** present (removed from the codebase):
 - No permission prompts
 - No file editing from agent responses
 
-Commands `:LazySpeakUndo`, `:LazySpeakSnapshots`, and `:LazySpeakSnapshotsPrune` exist in `plugin/lazyspeak.vim` but emit a warning that they are unavailable in transcription-only mode.
+Commands `:OutLoudUndo`, `:OutLoudSnapshots`, and `:OutLoudSnapshotsPrune` exist in `plugin/outloud.vim` but emit a warning that they are unavailable in transcription-only mode.
 
 ---
 
@@ -57,7 +57,7 @@ Commands `:LazySpeakUndo`, `:LazySpeakSnapshots`, and `:LazySpeakSnapshotsPrune`
 
 ## File Map
 
-### Lua Plugin (`lua/lazyspeak/`)
+### Lua Plugin (`lua/outloud/`)
 
 | File | Responsibility |
 |------|----------------|
@@ -65,16 +65,16 @@ Commands `:LazySpeakUndo`, `:LazySpeakSnapshots`, and `:LazySpeakSnapshotsPrune`
 | `voice.lua` | Spawns/manages the Rust daemon process via `vim.fn.jobstart`. JSON lines protocol over stdin/stdout. |
 | `sidebar.lua` | Session sidebar: fixed 4-row status header + conversation entries (turns, partials, errors). Hard-wrapped, re-flowing on resize. |
 | `ui.lua` | Statusline component only. Returns compact state strings (`ls:mic`, `ls:...`). |
-| `install.lua` | `:LazySpeakInstall` (cargo build), `llama-server` lifecycle (spawn, probe, stall detection, stop). |
-| `health.lua` | `:checkhealth lazyspeak` — checks daemon binary, llama-server, plugin config. |
+| `install.lua` | `:OutLoudInstall` (cargo build), `llama-server` lifecycle (spawn, probe, stall detection, stop). |
+| `health.lua` | `:checkhealth outloud` — checks daemon binary, llama-server, plugin config. |
 
 ### Plugin Entry (`plugin/`)
 
 | File | Responsibility |
 |------|----------------|
-| `lazyspeak.vim` | User commands: `:LazySpeakStart`, `:LazySpeakStop`, `:LazySpeakSidebar`, etc. |
+| `outloud.vim` | User commands: `:OutLoudStart`, `:OutLoudStop`, `:OutLoudSidebar`, etc. |
 
-### Rust Daemon (`crates/lazyspeak/`)
+### Rust Daemon (`crates/outloud/`)
 
 | File | Responsibility |
 |------|----------------|
@@ -105,7 +105,7 @@ Neovim (Lua plugin)
   │
   │ stdin/stdout JSON lines
   ▼
-lazyspeak daemon (Rust binary)
+outloud daemon (Rust binary)
   │  - mic capture (cpal)
   │  - energy-based VAD
   │  - STT via llama-server (HTTP)
@@ -193,11 +193,11 @@ nvim --headless -l tests/verify.lua
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LAZYSPEAK_STT_URL` | `http://127.0.0.1:8674` | llama-server URL |
-| `LAZYSPEAK_VAD_THRESHOLD` | `0.01` | RMS energy threshold |
-| `LAZYSPEAK_SILENCE_MS` | `400` | Trailing silence before finalization |
-| `LAZYSPEAK_MAX_MS` | `30000` | Max utterance length |
-| `LAZYSPEAK_PARTIAL_MS` | `700` | Partial transcript interval (0 = disabled) |
+| `OUTLOUD_STT_URL` | `http://127.0.0.1:8674` | llama-server URL |
+| `OUTLOUD_VAD_THRESHOLD` | `0.01` | RMS energy threshold |
+| `OUTLOUD_SILENCE_MS` | `400` | Trailing silence before finalization |
+| `OUTLOUD_MAX_MS` | `30000` | Max utterance length |
+| `OUTLOUD_PARTIAL_MS` | `700` | Partial transcript interval (0 = disabled) |
 
 ---
 
@@ -217,4 +217,4 @@ nvim --headless -l tests/verify.lua
 3. **Sidebar buffer is unlisted** — The sidebar uses `nvim_create_buf(false, true)`. It is cleaned up on `dispose()`.
 4. **llama-server is managed by the plugin** — `install.lua` spawns it, probes health, and detects stalls. External server mode (`model.server_url`) skips this.
 5. **No agent config in current code** — `init.lua` has no `agent` section in defaults. The `README.md` and `SPEC.md` still document it.
-6. **Snapshot commands warn** — `:LazySpeakUndo`, `:LazySpeakSnapshots`, `:LazySpeakSnapshotsPrune` emit warnings rather than doing anything.
+6. **Snapshot commands warn** — `:OutLoudUndo`, `:OutLoudSnapshots`, `:OutLoudSnapshotsPrune` emit warnings rather than doing anything.

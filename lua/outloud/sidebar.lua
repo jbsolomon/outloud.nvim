@@ -1,6 +1,6 @@
 local M = {}
 
---- The single lazyspeak surface: a right-hand sidebar rendering the session as
+--- The single outloud surface: a right-hand sidebar rendering the session as
 --- a structured conversation, with a fixed status header on top.
 ---
 --- Content is held as a list of typed entries (turn, message, thought, tool,
@@ -11,7 +11,7 @@ local M = {}
 ---
 --- Text is hard-wrapped to the window width and `wrap` is off, so box borders
 --- and gutters stay aligned instead of being broken up by soft wrapping.
----@class lazyspeak.Sidebar
+---@class outloud.Sidebar
 ---@field buf number?
 ---@field win number?
 ---@field opts { width: number, position: string }
@@ -35,16 +35,16 @@ local HEADER_H = 4
 --- Highlight groups, linked to standard groups so the sidebar inherits the
 --- user's colorscheme. `default = true` means an explicit user override wins.
 local HL_LINKS = {
-	LazySpeakSignalUp = "DiagnosticOk",
-	LazySpeakSignalStarting = "DiagnosticWarn",
-	LazySpeakSignalDown = "Comment",
-	LazySpeakSignalError = "DiagnosticError",
-	LazySpeakPhase = "Identifier",
-	LazySpeakHint = "Comment",
-	LazySpeakRule = "WinSeparator",
-	LazySpeakTurn = "Title",
-	LazySpeakFail = "DiagnosticError",
-	LazySpeakHelpTitle = "Title",
+	OutLoudSignalUp = "DiagnosticOk",
+	OutLoudSignalStarting = "DiagnosticWarn",
+	OutLoudSignalDown = "Comment",
+	OutLoudSignalError = "DiagnosticError",
+	OutLoudPhase = "Identifier",
+	OutLoudHint = "Comment",
+	OutLoudRule = "WinSeparator",
+	OutLoudTurn = "Title",
+	OutLoudFail = "DiagnosticError",
+	OutLoudHelpTitle = "Title",
 }
 
 local function define_highlights()
@@ -55,19 +55,19 @@ end
 
 define_highlights()
 vim.api.nvim_create_autocmd("ColorScheme", {
-	group = vim.api.nvim_create_augroup("lazyspeak_highlights", { clear = true }),
-	desc = "lazyspeak: re-link sidebar highlights",
+	group = vim.api.nvim_create_augroup("outloud_highlights", { clear = true }),
+	desc = "outloud: re-link sidebar highlights",
 	callback = define_highlights,
 })
 
-local NS = vim.api.nvim_create_namespace("lazyspeak_sidebar")
+local NS = vim.api.nvim_create_namespace("outloud_sidebar")
 
 --- Signal glyph highlight per state.
 local SIGNAL_HL = {
-	down = "LazySpeakSignalDown",
-	starting = "LazySpeakSignalStarting",
-	up = "LazySpeakSignalUp",
-	error = "LazySpeakSignalError",
+	down = "OutLoudSignalDown",
+	starting = "OutLoudSignalStarting",
+	up = "OutLoudSignalUp",
+	error = "OutLoudSignalError",
 }
 
 local BUSY = {
@@ -183,7 +183,7 @@ local function wrap(text, width)
 end
 
 ---@param opts? { width?: number, position?: string, keys?: table }
----@return lazyspeak.Sidebar
+---@return outloud.Sidebar
 function Sidebar:new(opts)
 	opts = opts or {}
 	return setmetatable({
@@ -214,20 +214,20 @@ function Sidebar:_ensure_buf()
 		return
 	end
 	self.buf = vim.api.nvim_create_buf(false, true)
-	pcall(vim.api.nvim_buf_set_name, self.buf, "lazyspeak://session")
+	pcall(vim.api.nvim_buf_set_name, self.buf, "outloud://session")
 	vim.api.nvim_set_option_value("buftype", "nofile", { buf = self.buf })
 	vim.api.nvim_set_option_value("swapfile", false, { buf = self.buf })
 	vim.api.nvim_set_option_value("bufhidden", "hide", { buf = self.buf })
-	vim.api.nvim_set_option_value("filetype", "lazyspeak", { buf = self.buf })
+	vim.api.nvim_set_option_value("filetype", "outloud", { buf = self.buf })
 	vim.api.nvim_set_option_value("modifiable", false, { buf = self.buf })
 
 	-- Local affordances, advertised in the hint row and the help block.
 	vim.keymap.set("n", "?", function()
 		self:toggle_help()
-	end, { buffer = self.buf, desc = "lazyspeak: toggle help" })
+	end, { buffer = self.buf, desc = "outloud: toggle help" })
 	vim.keymap.set("n", "q", function()
 		self:close()
-	end, { buffer = self.buf, desc = "lazyspeak: close sidebar" })
+	end, { buffer = self.buf, desc = "outloud: close sidebar" })
 
 	local blank = {}
 	for _ = 1, HEADER_H do
@@ -327,7 +327,7 @@ function Sidebar:_render_header()
 		spans[#spans + 1] = {
 			from = #signal_line,
 			to = #signal_line + #glyph,
-			hl = SIGNAL_HL[item[2]] or "LazySpeakSignalDown",
+			hl = SIGNAL_HL[item[2]] or "OutLoudSignalDown",
 		}
 		signal_line = signal_line .. glyph .. " " .. item[1] .. "  "
 	end
@@ -355,17 +355,17 @@ function Sidebar:_render_header()
 	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 1, 0, {
 		end_row = 2,
 		end_col = 0,
-		hl_group = "LazySpeakPhase",
+		hl_group = "OutLoudPhase",
 	})
 	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 2, 0, {
 		end_row = 3,
 		end_col = 0,
-		hl_group = "LazySpeakHint",
+		hl_group = "OutLoudHint",
 	})
 	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 3, 0, {
 		end_row = 4,
 		end_col = 0,
-		hl_group = "LazySpeakRule",
+		hl_group = "OutLoudRule",
 	})
 end
 
@@ -428,7 +428,7 @@ function Sidebar:_entry_lines(e, w)
 end
 
 --- The key reference. Shown until the first turn arrives, and on demand via
---- `?` or `:LazySpeakHelp`.
+--- `?` or `:OutLoudHelp`.
 ---@param w number
 ---@return string[]
 function Sidebar:_help_lines(w)
@@ -517,11 +517,11 @@ function Sidebar:_highlight(start_row, lines, help_len)
 		local group
 
 		if i <= help_len then
-			group = (i == 1) and "LazySpeakHelpTitle" or "LazySpeakHint"
+			group = (i == 1) and "OutLoudHelpTitle" or "OutLoudHint"
 		elseif line:match("^[╭│╰]") then
-			group = "LazySpeakTurn"
+			group = "OutLoudTurn"
 		elseif line:match("^⏺ !") then
-			group = "LazySpeakFail"
+			group = "OutLoudFail"
 		end
 
 		if group then
@@ -725,10 +725,10 @@ function Sidebar:open(focus)
 	vim.api.nvim_set_option_value("cursorline", false, { win = self.win })
 
 	-- Re-flow from the entry model when the window width changes.
-	self._augroup = vim.api.nvim_create_augroup("lazyspeak_sidebar", { clear = true })
+	self._augroup = vim.api.nvim_create_augroup("outloud_sidebar", { clear = true })
 	vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
 		group = self._augroup,
-		desc = "lazyspeak: re-flow sidebar on resize",
+		desc = "outloud: re-flow sidebar on resize",
 		callback = function()
 			if self:is_open() then
 				self:_render_header()

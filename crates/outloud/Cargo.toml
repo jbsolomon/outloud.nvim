@@ -1,6 +1,6 @@
 [package]
-name = "lazyspeak"
-description = "CLI daemon for lazyspeak.nvim — voice-driven coding"
+name = "outloud"
+description = "CLI daemon for outloud.nvim — voice-driven coding"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

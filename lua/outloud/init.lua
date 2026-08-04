@@ -1,12 +1,12 @@
-local Voice = require("lazyspeak.voice").Voice
-local Sidebar = require("lazyspeak.sidebar").Sidebar
-local Accumulator = require("lazyspeak.accumulator").Accumulator
-local ui = require("lazyspeak.ui")
-local install = require("lazyspeak.install")
+local Voice = require("outloud.voice").Voice
+local Sidebar = require("outloud.sidebar").Sidebar
+local Accumulator = require("outloud.accumulator").Accumulator
+local ui = require("outloud.ui")
+local install = require("outloud.install")
 
 local M = {}
 
----@class lazyspeak.Config
+---@class outloud.Config
 ---@field model { path: string, server_port: number, server_url?: string }
 ---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean }
 ---@field accumulator { enabled: boolean, mode: string, handler?: table, context: table }
@@ -14,7 +14,7 @@ local M = {}
 ---@field keys { push_to_talk: string, cancel: string, sidebar: string }
 ---@field daemon_cmd? string
 
----@type lazyspeak.Config
+---@type outloud.Config
 M.defaults = {
 	model = {
 		hf_repo = install.HF_REPO,
@@ -69,13 +69,13 @@ Return only the updated scratch pad content. Do not include explanations or mark
 	},
 }
 
----@type lazyspeak.Config
+---@type outloud.Config
 M.config = {}
 
----@type lazyspeak.Voice?
+---@type outloud.Voice?
 M._voice = nil
 
----@type lazyspeak.Sidebar?
+---@type outloud.Sidebar?
 M._sidebar = nil
 
 ---@type string
@@ -87,10 +87,10 @@ M._listening = false
 ---@type table?
 M._partial_range = nil
 
----@type lazyspeak.Accumulator?
+---@type outloud.Accumulator?
 M._accumulator = nil
 
----@return lazyspeak.Sidebar
+---@return outloud.Sidebar
 function M._ensure_sidebar()
 	if not M._sidebar then
 		local cfg = M.config.ui or M.defaults.ui
@@ -118,8 +118,8 @@ function M.setup(opts)
 
 	-- Never leave a daemon or llama-server process behind on exit.
 	vim.api.nvim_create_autocmd("VimLeavePre", {
-		group = vim.api.nvim_create_augroup("lazyspeak_shutdown", { clear = true }),
-		desc = "lazyspeak: shut down daemon and STT server",
+		group = vim.api.nvim_create_augroup("outloud_shutdown", { clear = true }),
+		desc = "outloud: shut down daemon and STT server",
 		callback = function()
 			M.stop()
 		end,
@@ -147,7 +147,7 @@ function M.setup(opts)
 		-- <Space> toggles recording on/off
 		vim.keymap.set("n", "<Space>", function()
 			if not M._voice or not M._voice:is_running() then
-				vim.notify("[lazyspeak] waiting for daemon to start...", vim.log.levels.INFO)
+				vim.notify("[outloud] waiting for daemon to start...", vim.log.levels.INFO)
 				return
 			end
 			if M._listening then
@@ -157,7 +157,7 @@ function M.setup(opts)
 				M._voice:start_listening()
 				M._listening = true
 			end
-		end, { buffer = buf, desc = "lazyspeak: toggle recording" })
+		end, { buffer = buf, desc = "outloud: toggle recording" })
 
 		-- <Esc> cancels and dismisses the UI
 		vim.keymap.set("n", "<Esc>", function()
@@ -166,21 +166,21 @@ function M.setup(opts)
 			end
 			cleanup()
 			M.dismiss()
-		end, { buffer = buf, desc = "lazyspeak: close" })
+		end, { buffer = buf, desc = "outloud: close" })
 
 		M._session_cleanup = cleanup
-	end, { desc = "lazyspeak: open" })
+	end, { desc = "outloud: open" })
 
 	vim.keymap.set("n", keys.cancel, function()
 		if M._voice and M._voice:is_running() then
 			M._voice:cancel()
 			M._listening = false
 		end
-	end, { desc = "lazyspeak: cancel" })
+	end, { desc = "outloud: cancel" })
 
 	vim.keymap.set("n", keys.sidebar, function()
 		M._ensure_sidebar():toggle()
-	end, { desc = "lazyspeak: toggle session sidebar" })
+	end, { desc = "outloud: toggle session sidebar" })
 end
 
 --- Build the environment variable table for the daemon process.
@@ -190,12 +190,12 @@ end
 local function build_daemon_env(model, audio)
 	local url = model.server_url or ("http://127.0.0.1:" .. model.server_port)
 	return {
-		LAZYSPEAK_STT_URL = url,
-		LAZYSPEAK_VAD_THRESHOLD = tostring(audio.vad_threshold),
-		LAZYSPEAK_SILENCE_MS = tostring(audio.silence_duration_ms),
-		LAZYSPEAK_MAX_MS = tostring(audio.max_duration_ms),
-		LAZYSPEAK_PARTIAL_MS = tostring(audio.partial_interval_ms),
-		LAZYSPEAK_WINDOW_MS = tostring(audio.window_ms),
+		OUTLOUD_STT_URL = url,
+		OUTLOUD_VAD_THRESHOLD = tostring(audio.vad_threshold),
+		OUTLOUD_SILENCE_MS = tostring(audio.silence_duration_ms),
+		OUTLOUD_MAX_MS = tostring(audio.max_duration_ms),
+		OUTLOUD_PARTIAL_MS = tostring(audio.partial_interval_ms),
+		OUTLOUD_WINDOW_MS = tostring(audio.window_ms),
 	}
 end
 
@@ -363,7 +363,7 @@ function M._start_pipeline()
 
 	M._voice:on_error(function(message)
 		vim.schedule(function()
-			vim.notify("[lazyspeak] daemon error: " .. message, vim.log.levels.ERROR)
+			vim.notify("[outloud] daemon error: " .. message, vim.log.levels.ERROR)
 			local sb = M._ensure_sidebar()
 			sb:set_status("daemon", "error")
 			sb:add_error("daemon: " .. message)
@@ -408,11 +408,11 @@ end
 --- Confirm the accumulated text: invoke the handler and apply the result.
 function M.confirm_accumulator()
 	if not M._accumulator then
-		vim.notify("[lazyspeak] accumulator not active", vim.log.levels.WARN)
+		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
 		return
 	end
 	if not M._accumulator:has_text() then
-		vim.notify("[lazyspeak] accumulator is empty", vim.log.levels.WARN)
+		vim.notify("[outloud] accumulator is empty", vim.log.levels.WARN)
 		return
 	end
 	M._accumulator:confirm(function(text)
@@ -426,17 +426,17 @@ end
 --- Cancel and discard the accumulated text.
 function M.cancel_accumulator()
 	if not M._accumulator then
-		vim.notify("[lazyspeak] accumulator not active", vim.log.levels.WARN)
+		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
 		return
 	end
 	M._accumulator:clear()
-	vim.notify("[lazyspeak] accumulator cleared", vim.log.levels.INFO)
+	vim.notify("[outloud] accumulator cleared", vim.log.levels.INFO)
 end
 
 --- Clear the accumulation without cancelling.
 function M.clear_accumulator()
 	if not M._accumulator then
-		vim.notify("[lazyspeak] accumulator not active", vim.log.levels.WARN)
+		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
 		return
 	end
 	M._accumulator:clear()

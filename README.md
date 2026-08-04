@@ -1,24 +1,24 @@
 <p align="center">
-  <h1 align="center">lazyspeak.nvim</h1>
+  <h1 align="center">outloud.nvim</h1>
   <p align="center">
     Voice-driven coding for Neovim. Speak your intent, edits appear in your editor.
     <br /><br />
     <a href="#installation">Install</a>
     &middot;
-    <a href="https://github.com/urmzd/lazyspeak.nvim/issues">Report Bug</a>
+    <a href="https://github.com/urmzd/outloud.nvim/issues">Report Bug</a>
     &middot;
     <a href="#agent-setup">Agents</a>
   </p>
 </p>
 
 <p align="center">
-  <a href="https://github.com/urmzd/lazyspeak.nvim/actions/workflows/ci.yml"><img src="https://github.com/urmzd/lazyspeak.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/urmzd/outloud.nvim/actions/workflows/ci.yml"><img src="https://github.com/urmzd/outloud.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   &nbsp;
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/urmzd/lazyspeak.nvim" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/urmzd/outloud.nvim" alt="License"></a>
 </p>
 
 <p align="center">
-  <img src="showcase/lazyspeak-demo.gif" alt="lazyspeak.nvim demo" width="80%">
+  <img src="showcase/outloud-demo.gif" alt="outloud.nvim demo" width="80%">
 </p>
 
 ```
@@ -46,24 +46,24 @@ Optional: [just](https://github.com/casey/just) for convenient dev commands.
 
 ```lua
 {
-  "urmzd/lazyspeak.nvim",
-  build = ":LazySpeakInstall",
+  "urmzd/outloud.nvim",
+  build = ":OutLoudInstall",
   opts = {
     agent = { adapter = "claudecode" },
   },
 }
 ```
 
-`:LazySpeakInstall` will build and install the `lazyspeak` daemon binary via `cargo install`.
+`:OutLoudInstall` will build and install the `outloud` daemon binary via `cargo install`.
 
-When you run `:LazySpeakStart`, the plugin automatically starts `llama-server` which downloads [ggml-org/Voxtral-Mini-3B-2507-GGUF](https://huggingface.co/ggml-org/Voxtral-Mini-3B-2507-GGUF) (Apache 2.0, ~3.2 GB) on first run. It shuts down with `:LazySpeakStop`.
+When you run `:OutLoudStart`, the plugin automatically starts `llama-server` which downloads [ggml-org/Voxtral-Mini-3B-2507-GGUF](https://huggingface.co/ggml-org/Voxtral-Mini-3B-2507-GGUF) (Apache 2.0, ~3.2 GB) on first run. It shuts down with `:OutLoudStop`.
 
 #### External STT server (advanced)
 
 To use your own STT server instead of the auto-managed llama-server:
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   model = {
     server_url = "http://127.0.0.1:8674",
   },
@@ -76,11 +76,11 @@ The server must expose an OpenAI-compatible `/v1/audio/transcriptions` endpoint.
 
 ```sh
 # 1. Clone the plugin
-git clone https://github.com/urmzd/lazyspeak.nvim ~/.local/share/nvim/lazy/lazyspeak.nvim
+git clone https://github.com/urmzd/outloud.nvim ~/.local/share/nvim/lazy/outloud.nvim
 
 # 2. Build and install the daemon binary
-cd ~/.local/share/nvim/lazy/lazyspeak.nvim
-cargo install --path crates/lazyspeak
+cd ~/.local/share/nvim/lazy/outloud.nvim
+cargo install --path crates/outloud
 ```
 
 ### Verify installation
@@ -88,12 +88,12 @@ cargo install --path crates/lazyspeak
 Open Neovim and run:
 
 ```vim
-:checkhealth lazyspeak
+:checkhealth outloud
 ```
 
 ## Agent Setup
 
-lazyspeak.nvim speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com)
+outloud.nvim speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com)
 to any compatible agent over stdio. Agent responses, tool calls, file edits, and
 permission prompts all stream back into Neovim live. Pick an agent:
 
@@ -104,7 +104,7 @@ The `claudecode` adapter launches Anthropic's official ACP bridge,
 (formerly `@zed-industries/claude-code-acp`), via `npx` — no global install required:
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   agent = { adapter = "claudecode" },
 })
 ```
@@ -113,7 +113,7 @@ require("lazyspeak").setup({
 `ANTHROPIC_API_KEY`, or run `claude login` once (its cached token is reused). No
 in-editor login flow is needed.
 
-> Claude has no native audio input, so lazyspeak always transcribes locally
+> Claude has no native audio input, so outloud always transcribes locally
 > (Voxtral) and sends **text** to the agent.
 
 ### Other ACP agents
@@ -121,7 +121,7 @@ in-editor login flow is needed.
 Point the `acp` adapter at any ACP agent's launch command:
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   agent = {
     adapter = "acp",
     cmd = { "gemini", "--acp" },  -- Gemini CLI (natively multimodal)
@@ -138,13 +138,13 @@ End to end, from a fresh install to your first voice-driven edit.
 **1. Confirm the pieces are in place.**
 
 ```vim
-:checkhealth lazyspeak
+:checkhealth outloud
 ```
 
-This checks the `lazyspeak` daemon binary, `llama-server`, `npx`, your Anthropic
+This checks the `outloud` daemon binary, `llama-server`, `npx`, your Anthropic
 credentials, the Voxtral model file, and whether `setup()` has run. If the daemon
-line warns, run `:LazySpeakInstall` to build it (`cargo install --path
-crates/lazyspeak`, roughly a minute). The model warning is expected until your
+line warns, run `:OutLoudInstall` to build it (`cargo install --path
+crates/outloud`, roughly a minute). The model warning is expected until your
 first `<leader>ls`.
 
 **2. Open a real file** in the project you want to work on. The agent operates
@@ -165,7 +165,7 @@ which part is holding things up and what to press next:
 
 `○` down, `◐` starting, `●` up, `✗` failed. Until your first turn, the body
 below lists every key; press `?` in the sidebar to bring that reference back at
-any time, or `:LazySpeakHelp` from anywhere.
+any time, or `:OutLoudHelp` from anywhere.
 
 On the very first run two slow things happen here, both one-time:
 
@@ -231,7 +231,7 @@ touching the keyboard. Worth exercising once early, before you trust it with
 something real.
 
 **8. Finish up.** `<Esc>` dismisses the UI but leaves the daemon warm, so the
-next `<leader>ls` is instant. `:LazySpeakStop` shuts everything down and frees
+next `<leader>ls` is instant. `:OutLoudStop` shuts everything down and frees
 the model's memory. Quitting Neovim tears it all down either way.
 
 ### Tuning after a few turns
@@ -292,16 +292,16 @@ is healthy, a `loading model...` that sits for minutes is memory pressure.
 
 | Command | Description |
 |---------|-------------|
-| `:LazySpeakStart` | Start daemon + agent |
-| `:LazySpeakStop` | Stop everything and tear down the UI |
-| `:LazySpeakStatus` | Show daemon/agent/model status |
-| `:LazySpeakSidebar` | Toggle the session sidebar |
-| `:LazySpeakHelp` | Toggle the key reference in the sidebar |
-| `:LazySpeakDismiss` | Hide the sidebar, leave the daemon running |
-| `:LazySpeakUndo` | Revert last agent edit |
-| `:LazySpeakSnapshots` | List snapshots for current session |
-| `:LazySpeakSnapshotsPrune` | Drop orphaned `lazyspeak:` git stash entries |
-| `:LazySpeakInstall` | Build daemon binary |
+| `:OutLoudStart` | Start daemon + agent |
+| `:OutLoudStop` | Stop everything and tear down the UI |
+| `:OutLoudStatus` | Show daemon/agent/model status |
+| `:OutLoudSidebar` | Toggle the session sidebar |
+| `:OutLoudHelp` | Toggle the key reference in the sidebar |
+| `:OutLoudDismiss` | Hide the sidebar, leave the daemon running |
+| `:OutLoudUndo` | Revert last agent edit |
+| `:OutLoudSnapshots` | List snapshots for current session |
+| `:OutLoudSnapshotsPrune` | Drop orphaned `outloud:` git stash entries |
+| `:OutLoudInstall` | Build daemon binary |
 
 ### The sidebar
 
@@ -324,7 +324,7 @@ sidebar window: `?` toggles the full reference, `q` closes it.
 
 Colours link to standard groups (`DiagnosticOk`/`Warn`/`Error`, `Comment`,
 `Title`, `Function`), so the sidebar follows your colorscheme. Override any of
-the `LazySpeak*` groups to change it.
+the `OutLoud*` groups to change it.
 
 Every item is framed as its own block, so you can tell a response from a file
 read at a glance: your turns are boxed with a timestamp, agent output and
@@ -340,8 +340,8 @@ you to the bottom.
 
 | Action | Sidebar window | Conversation | Daemon |
 |--------|---------------|--------------|--------|
-| `<Esc>` / `:LazySpeakDismiss` | closed | kept | running |
-| `:LazySpeakStop` | closed | deleted | stopped |
+| `<Esc>` / `:OutLoudDismiss` | closed | kept | running |
+| `:OutLoudStop` | closed | deleted | stopped |
 | Exit Neovim | closed | deleted | stopped |
 
 Everything shuts down on exit, so quitting Neovim never leaves the daemon,
@@ -376,7 +376,7 @@ copied aside, so `<leader>lu` (or saying "undo") can put them back.
 Snapshots live **outside your repository**, under Neovim's state directory:
 
 ```
-$XDG_STATE_HOME/nvim/lazyspeak/snapshots/<session>/<snapshot>/
+$XDG_STATE_HOME/nvim/outloud/snapshots/<session>/<snapshot>/
 ```
 
 Nothing is written to the repo itself until an undo actually restores files. An
@@ -394,7 +394,7 @@ Lifecycle:
 |-------|--------|
 | Turn changes nothing | snapshot handed back immediately |
 | Past `snapshot.max_stack` | oldest snapshot deleted from disk with its record |
-| `:LazySpeakStop` or quitting | the whole session's snapshots deleted |
+| `:OutLoudStop` or quitting | the whole session's snapshots deleted |
 | Startup | session dirs older than `snapshot.max_age_days` swept |
 
 Undo restores the contents of files captured at snapshot time and returns to
@@ -403,10 +403,10 @@ created are left in place, since deleting them is not recoverable from here.
 Untracked files are not captured. Undo requires a git repository; outside one no
 snapshot is taken.
 
-`:LazySpeakSnapshotsPrune` sweeps stale session directories and, if you used a
+`:OutLoudSnapshotsPrune` sweeps stale session directories and, if you used a
 version that wrote to `git stash`, offers to drop those leftovers. It lists them
 and asks first, and only ever considers entries whose message begins with
-`lazyspeak:`.
+`outloud:`.
 
 ### Voice commands
 
@@ -423,7 +423,7 @@ These phrases are intercepted locally before reaching the agent:
 Add to your status line (lualine, etc.):
 
 ```lua
-require("lazyspeak").status()
+require("outloud").status()
 -- Returns: "" (inactive), "ls:mic" (listening), "ls:..." (transcribing),
 --          "ls:>>>" (agent working), "ls:???" (awaiting permission)
 ```
@@ -433,7 +433,7 @@ require("lazyspeak").status()
 Full configuration with defaults:
 
 ```lua
-require("lazyspeak").setup({
+require("outloud").setup({
   agent = {
     adapter = "claudecode",  -- "claudecode" | "acp"
     -- cmd = { "gemini", "--acp" },  -- override launch command (acp adapter)
@@ -484,7 +484,7 @@ Neovim (Lua plugin)
   |
   | stdin/stdout JSON lines
   v
-lazyspeak daemon (Rust binary)
+outloud daemon (Rust binary)
   |  - mic capture (cpal)
   |  - energy-based VAD
   |  - STT via llama-server (HTTP)
@@ -509,11 +509,11 @@ just nvim-dev       # Launch Neovim with plugin loaded
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LAZYSPEAK_STT_URL` | `http://127.0.0.1:8674` | llama-server URL |
-| `LAZYSPEAK_VAD_THRESHOLD` | `0.01` | RMS energy threshold for speech detection |
-| `LAZYSPEAK_SILENCE_MS` | `400` | Trailing silence before an utterance is finalized |
-| `LAZYSPEAK_MAX_MS` | `30000` | Max utterance length before forced finalization |
-| `LAZYSPEAK_PARTIAL_MS` | `700` | Interim transcript cadence while speaking (0 disables) |
+| `OUTLOUD_STT_URL` | `http://127.0.0.1:8674` | llama-server URL |
+| `OUTLOUD_VAD_THRESHOLD` | `0.01` | RMS energy threshold for speech detection |
+| `OUTLOUD_SILENCE_MS` | `400` | Trailing silence before an utterance is finalized |
+| `OUTLOUD_MAX_MS` | `30000` | Max utterance length before forced finalization |
+| `OUTLOUD_PARTIAL_MS` | `700` | Interim transcript cadence while speaking (0 disables) |
 
 These are set automatically from your `audio` config; override them directly only when running the daemon standalone.
 

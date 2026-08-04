@@ -12,19 +12,19 @@ family = "Iosevka Nerd Font Mono"
 
 [[scenes]]
 type = "terminal"
-name = "lazyspeak-demo"
+name = "outloud-demo"
 theme = "dracula"
 cols = 100
 rows = 35
 
 [scenes.intro]
-text = "lazyspeak.nvim\nVoice-driven coding for Neovim"
+text = "outloud.nvim\nVoice-driven coding for Neovim"
 duration = 2000
 center = true
 
 [[scenes.interactions]]
 type = "type"
-text = "lazyspeak --help"
+text = "outloud --help"
 speed = 50
 
 [[scenes.interactions]]

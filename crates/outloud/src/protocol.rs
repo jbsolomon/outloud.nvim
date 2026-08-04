@@ -139,7 +139,10 @@ mod tests {
 
     #[test]
     fn status_event_serializes() {
-        let line = serialize_event(&Event::Status { state: State::Listening }).unwrap();
+        let line = serialize_event(&Event::Status {
+            state: State::Listening,
+        })
+        .unwrap();
         assert_eq!(line, r#"{"type":"status","state":"listening"}"#);
     }
 
@@ -166,10 +169,7 @@ mod tests {
 
     #[test]
     fn state_serializes_lowercase() {
-        assert_eq!(
-            serde_json::to_string(&State::Idle).unwrap(),
-            r#""idle""#
-        );
+        assert_eq!(serde_json::to_string(&State::Idle).unwrap(), r#""idle""#);
         assert_eq!(
             serde_json::to_string(&State::Listening).unwrap(),
             r#""listening""#
@@ -217,4 +217,3 @@ mod tests {
         assert!(line.contains(r#"hello \"world\" \\test"#));
     }
 }
-

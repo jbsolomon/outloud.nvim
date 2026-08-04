@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::protocol::Event;
 use crate::transcribe::SpeechTranscriber;
@@ -102,7 +102,7 @@ impl Transform for TranscribeTransform {
                             seq,
                         }
                     }
-                },
+                }
                 Err(e) if is_final => Event::Error {
                     message: format!("transcription failed: {e}"),
                 },
@@ -121,5 +121,3 @@ impl Transform for TranscribeTransform {
         Ok(event)
     }
 }
-
-

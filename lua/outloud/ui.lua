@@ -1,5 +1,5 @@
 --- Status line component. All in-editor rendering lives in
---- `lazyspeak.sidebar`; this only exposes the compact state string users embed
+--- `outloud.sidebar`; this only exposes the compact state string users embed
 --- in lualine and friends.
 local M = {}
 

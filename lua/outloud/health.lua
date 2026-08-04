@@ -1,14 +1,14 @@
 local M = {}
 
 function M.check()
-	vim.health.start("lazyspeak")
+	vim.health.start("outloud")
 
 	-- Daemon binary
-	if vim.fn.executable("lazyspeak") == 1 then
+	if vim.fn.executable("outloud") == 1 then
 		vim.health.ok("daemon binary found in PATH")
 	else
 		vim.health.warn("daemon binary not in PATH", {
-			"Run: cargo install --path crates/lazyspeak",
+			"Run: cargo install --path crates/outloud",
 			"Or: just install",
 		})
 	end
@@ -23,11 +23,11 @@ function M.check()
 	end
 
 	-- Plugin state
-	local ok, ls = pcall(require, "lazyspeak")
+	local ok, ls = pcall(require, "outloud")
 	if ok and ls.config and ls.config.model then
 		vim.health.ok("plugin loaded and configured")
 	elseif ok then
-		vim.health.warn("plugin loaded but not configured — call require('lazyspeak').setup()")
+		vim.health.warn("plugin loaded but not configured — call require('outloud').setup()")
 	else
 		vim.health.error("plugin failed to load")
 	end

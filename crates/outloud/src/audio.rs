@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn from_env_no_vars() {
-        // With no LAZYSPEAK_* env vars set, should fall back to defaults
+        // With no OUTLOUD_* env vars set, should fall back to defaults
         let cfg = AudioConfig::from_env_map(std::iter::empty::<(&str, &str)>());
         assert_eq!(cfg.sample_rate, 16000);
         assert_eq!(cfg.channels, 1);
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn from_env_overrides_vad_threshold() {
-        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_VAD_THRESHOLD", "0.05")].into_iter());
+        let cfg = AudioConfig::from_env_map([("OUTLOUD_VAD_THRESHOLD", "0.05")].into_iter());
         assert_eq!(cfg.vad_threshold, 0.05);
         // Others unchanged
         assert_eq!(cfg.silence_duration_ms, 400);
@@ -79,41 +79,44 @@ mod tests {
 
     #[test]
     fn from_env_overrides_silence_ms() {
-        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_SILENCE_MS", "800")].into_iter());
+        let cfg = AudioConfig::from_env_map([("OUTLOUD_SILENCE_MS", "800")].into_iter());
         assert_eq!(cfg.silence_duration_ms, 800);
     }
 
     #[test]
     fn from_env_overrides_max_ms() {
-        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_MAX_MS", "60000")].into_iter());
+        let cfg = AudioConfig::from_env_map([("OUTLOUD_MAX_MS", "60000")].into_iter());
         assert_eq!(cfg.max_duration_ms, 60000);
     }
 
     #[test]
     fn from_env_overrides_partial_ms() {
-        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_PARTIAL_MS", "0")].into_iter());
+        let cfg = AudioConfig::from_env_map([("OUTLOUD_PARTIAL_MS", "0")].into_iter());
         assert_eq!(cfg.partial_interval_ms, 0);
     }
 
     #[test]
     fn from_env_overrides_window_ms() {
-        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_WINDOW_MS", "10000")].into_iter());
+        let cfg = AudioConfig::from_env_map([("OUTLOUD_WINDOW_MS", "10000")].into_iter());
         assert_eq!(cfg.window_ms, 10000);
     }
 
     #[test]
     fn from_env_invalid_value_falls_back() {
-        let cfg = AudioConfig::from_env_map([("LAZYSPEAK_SILENCE_MS", "not_a_number")].into_iter());
+        let cfg = AudioConfig::from_env_map([("OUTLOUD_SILENCE_MS", "not_a_number")].into_iter());
         assert_eq!(cfg.silence_duration_ms, 400); // default
     }
 
     #[test]
     fn from_env_multiple_overrides() {
-        let cfg = AudioConfig::from_env_map([
-            ("LAZYSPEAK_VAD_THRESHOLD", "0.1"),
-            ("LAZYSPEAK_SILENCE_MS", "200"),
-            ("LAZYSPEAK_PARTIAL_MS", "500"),
-        ].into_iter());
+        let cfg = AudioConfig::from_env_map(
+            [
+                ("OUTLOUD_VAD_THRESHOLD", "0.1"),
+                ("OUTLOUD_SILENCE_MS", "200"),
+                ("OUTLOUD_PARTIAL_MS", "500"),
+            ]
+            .into_iter(),
+        );
         assert_eq!(cfg.vad_threshold, 0.1);
         assert_eq!(cfg.silence_duration_ms, 200);
         assert_eq!(cfg.partial_interval_ms, 500);
@@ -126,7 +129,7 @@ mod tests {
 impl AudioConfig {
     /// Build from an iterator of (key, value) pairs, falling back to
     /// defaults for anything missing or unparseable.
-    pub fn from_env_map<'a, I, K, V>(env: I) -> Self
+    pub fn from_env_map<I, K, V>(env: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
@@ -136,24 +139,26 @@ impl AudioConfig {
             .into_iter()
             .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
             .collect();
-        fn parse<T: std::str::FromStr>(map: &std::collections::HashMap<String, String>, key: &str, default: T) -> T {
-            map.get(key)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default)
+        fn parse<T: std::str::FromStr>(
+            map: &std::collections::HashMap<String, String>,
+            key: &str,
+            default: T,
+        ) -> T {
+            map.get(key).and_then(|v| v.parse().ok()).unwrap_or(default)
         }
         let d = AudioConfig::default();
         AudioConfig {
             sample_rate: d.sample_rate,
             channels: d.channels,
-            vad_threshold: parse(&map, "LAZYSPEAK_VAD_THRESHOLD", d.vad_threshold),
-            silence_duration_ms: parse(&map, "LAZYSPEAK_SILENCE_MS", d.silence_duration_ms),
-            max_duration_ms: parse(&map, "LAZYSPEAK_MAX_MS", d.max_duration_ms),
-            partial_interval_ms: parse(&map, "LAZYSPEAK_PARTIAL_MS", d.partial_interval_ms),
-            window_ms: parse(&map, "LAZYSPEAK_WINDOW_MS", d.window_ms),
+            vad_threshold: parse(&map, "OUTLOUD_VAD_THRESHOLD", d.vad_threshold),
+            silence_duration_ms: parse(&map, "OUTLOUD_SILENCE_MS", d.silence_duration_ms),
+            max_duration_ms: parse(&map, "OUTLOUD_MAX_MS", d.max_duration_ms),
+            partial_interval_ms: parse(&map, "OUTLOUD_PARTIAL_MS", d.partial_interval_ms),
+            window_ms: parse(&map, "OUTLOUD_WINDOW_MS", d.window_ms),
         }
     }
 
-    /// Build from `LAZYSPEAK_*` environment variables, falling back to defaults
+    /// Build from `OUTLOUD_*` environment variables, falling back to defaults
     /// for anything unset or unparseable.
     pub fn from_env() -> Self {
         Self::from_env_map(std::env::vars())
@@ -309,17 +314,11 @@ impl AudioCapture {
                         st.partial_in_flight = true;
 
                         let total_samples = st.buffer.len();
-                        let window_samples =
-                            (window_ms as usize * sample_rate as usize) / 1000;
-                        let window_start = if total_samples > window_samples {
-                            total_samples - window_samples
-                        } else {
-                            0
-                        };
+                        let window_samples = (window_ms as usize * sample_rate as usize) / 1000;
+                        let window_start = total_samples.saturating_sub(window_samples);
                         let window = st.buffer[window_start..].to_vec();
 
-                        let window_start_ms =
-                            (window_start as u64 * 1000) / sample_rate as u64;
+                        let window_start_ms = (window_start as u64 * 1000) / sample_rate as u64;
                         let window_end_ms = (total_samples as u64 * 1000) / sample_rate as u64;
 
                         st.seq += 1;

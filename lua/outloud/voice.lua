@@ -1,6 +1,6 @@
 local M = {}
 
----@class lazyspeak.Voice
+---@class outloud.Voice
 ---@field job_id number?
 ---@field partial string buffered partial line from stdout
 ---@field callbacks table<string, function>
@@ -15,7 +15,7 @@ function Voice:new(opts)
 		job_id = nil,
 		partial = "",
 		callbacks = {},
-		daemon_cmd = opts.daemon_cmd or "lazyspeak",
+		daemon_cmd = opts.daemon_cmd or "outloud",
 		env = opts.env or {},
 	}, Voice)
 end
@@ -80,7 +80,7 @@ function Voice:start()
 	})
 
 	if self.job_id <= 0 then
-		vim.notify("[lazyspeak] failed to start daemon: " .. self.daemon_cmd, vim.log.levels.ERROR)
+		vim.notify("[outloud] failed to start daemon: " .. self.daemon_cmd, vim.log.levels.ERROR)
 		self.job_id = nil
 	end
 end

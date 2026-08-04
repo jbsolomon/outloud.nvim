@@ -1,6 +1,6 @@
 #!/usr/bin/env -S nvim --headless -l
 
--- End-to-end integration test for lazyspeak.nvim
+-- End-to-end integration test for outloud.nvim
 -- Simulates the full pipeline: setup -> start -> simulated daemon -> transcript -> buffer insertion
 -- Run: nvim --headless -l tests/integration.lua
 
@@ -52,7 +52,7 @@ local function section(name)
   print(string.format("\n=== %s ===", name))
 end
 
-print("lazyspeak.nvim integration test")
+print("outloud.nvim integration test")
 print(string.rep("=", 45))
 
 -- ============================================================================
@@ -61,12 +61,12 @@ print(string.rep("=", 45))
 section("1. Module Loading")
 
 local modules = {
-  "lazyspeak",
-  "lazyspeak.voice",
-  "lazyspeak.sidebar",
-  "lazyspeak.ui",
-  "lazyspeak.install",
-  "lazyspeak.health",
+  "outloud",
+  "outloud.voice",
+  "outloud.sidebar",
+  "outloud.ui",
+  "outloud.install",
+  "outloud.health",
 }
 
 for _, mod_path in ipairs(modules) do
@@ -79,7 +79,7 @@ end
 -- ============================================================================
 section("2. Config Setup & Defaults")
 
-local ls = require("lazyspeak")
+local ls = require("outloud")
 
 -- Test defaults structure
 assert_type(ls.defaults, "table", "defaults is a table")
@@ -120,7 +120,7 @@ assert_eq(ls.config.ui.sidebar_position, "right", "default sidebar_position pres
 -- ============================================================================
 section("3. Voice Class - Construction & API")
 
-local Voice = require("lazyspeak.voice").Voice
+local Voice = require("outloud.voice").Voice
 
 -- Test construction
 local voice = Voice:new({
@@ -134,7 +134,7 @@ assert_eq(voice:is_running(), false, "new Voice is not running")
 
 -- Test default daemon_cmd
 local voice_default = Voice:new({})
-assert_eq(voice_default.daemon_cmd, "lazyspeak", "default daemon_cmd is 'lazyspeak'")
+assert_eq(voice_default.daemon_cmd, "outloud", "default daemon_cmd is 'outloud'")
 
 -- Test callback registration
 local transcript_called = false
@@ -236,7 +236,7 @@ assert_eq(#events, 7, "empty line ignored, still seven events")
 -- ============================================================================
 section("5. Sidebar - Construction & State")
 
-local Sidebar = require("lazyspeak.sidebar").Sidebar
+local Sidebar = require("outloud.sidebar").Sidebar
 
 local sidebar = Sidebar:new({
   width = 48,
@@ -318,7 +318,7 @@ assert_eq(last.kind, "note", "cancelled note added")
 -- ============================================================================
 section("7. UI Statusline")
 
-local ui = require("lazyspeak.ui")
+local ui = require("outloud.ui")
 
 ui.set_state("")
 assert_eq(ui.statusline(), "", "empty state returns empty string")
@@ -343,7 +343,7 @@ ui.set_state("inactive")
 -- ============================================================================
 section("8. Install Module")
 
-local install = require("lazyspeak.install")
+local install = require("outloud.install")
 
 assert_type(install.HF_REPO, "string", "HF_REPO is a string")
 assert_type(install.DEFAULT_PORT, "number", "DEFAULT_PORT is a number")
@@ -361,7 +361,7 @@ assert_ok(install.HF_REPO:match("Voxtral"), "HF_REPO contains 'Voxtral'")
 section("9. Health Check")
 
 local health_ok, health_err = pcall(function()
-  require("lazyspeak.health").check()
+  require("outloud.health").check()
 end)
 assert_ok(health_ok, "health.check() runs without error", health_err)
 
@@ -490,10 +490,10 @@ assert_eq(ls.defaults.agent, nil, "defaults.agent is nil (no ACP)")
 
 -- Verify deleted modules don't load
 local deleted_modules = {
-  "lazyspeak.core",
-  "lazyspeak.snapshot",
-  "lazyspeak.adapters.acp",
-  "lazyspeak.adapters.claudecode",
+  "outloud.core",
+  "outloud.snapshot",
+  "outloud.adapters.acp",
+  "outloud.adapters.claudecode",
 }
 
 for _, mod_path in ipairs(deleted_modules) do
@@ -525,7 +525,7 @@ assert_eq(ls.config.audio.live_buffer, true, "live_buffer for env")
 -- ============================================================================
 section("14. Accumulator Module")
 
-local Accumulator = require("lazyspeak.accumulator").Accumulator
+local Accumulator = require("outloud.accumulator").Accumulator
 
 -- Construction
 local acc = Accumulator:new({ mode = "hidden" })

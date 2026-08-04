@@ -1,6 +1,6 @@
 # Roadmap
 
-Current state and planned work for lazyspeak.nvim.
+Current state and planned work for outloud.nvim.
 
 ## Completed (v0.1–v0.4)
 
@@ -48,7 +48,7 @@ command ("with this file", "just the selection"); and how agents that ignore
 `resource_link` should be handled.
 
 **Impact:** The difference between dictating a specification and dictating an
-instruction. This is the largest single gap between lazyspeak and using a coding
+instruction. This is the largest single gap between outloud and using a coding
 agent by hand.
 
 ### Silero VAD — replace energy-based VAD
@@ -108,7 +108,7 @@ binaries are in place and build complexity matters less.
 
 ### Native-audio fast path (Gemini)
 
-Most ACP agents (including Claude) take only text, so lazyspeak transcribes
+Most ACP agents (including Claude) take only text, so outloud transcribes
 locally and sends a text content block. Gemini CLI (`gemini --acp`) advertises
 `promptCapabilities.audio` and is natively multimodal, so an opt-in fast path
 could forward the raw audio content block and skip local STT for that agent.

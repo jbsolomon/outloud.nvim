@@ -2,20 +2,20 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
-use lazyspeak::audio::{AudioCapture, AudioConfig};
-use lazyspeak::pipeline::{AudioSource, EventSink, TranscribeTransform, VadFilter};
-use lazyspeak::protocol::{Event, State, parse_command, serialize_event};
-use lazyspeak::transcribe::SpeechTranscriber;
+use outloud::audio::{AudioCapture, AudioConfig};
+use outloud::pipeline::{AudioSource, EventSink, TranscribeTransform, VadFilter};
+use outloud::protocol::{Event, State, parse_command, serialize_event};
+use outloud::transcribe::SpeechTranscriber;
 use streamsafe::PipelineBuilder;
 use tokio_util::sync::CancellationToken;
 
 /// Build the HTTP transcription backend from environment variables.
 ///
-/// LAZYSPEAK_STT_URL — server URL (default http://127.0.0.1:8674)
+/// OUTLOUD_STT_URL — server URL (default http://127.0.0.1:8674)
 fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
-    use lazyspeak::transcribe::http::{DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig};
+    use outloud::transcribe::http::{DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig};
     let server_url =
-        std::env::var("LAZYSPEAK_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+        std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
     let transcriber = HttpTranscriber::new(HttpTranscriberConfig { server_url });
     Ok(Box::new(transcriber))
 }
@@ -63,18 +63,18 @@ async fn stdin_command_loop(
 
             match parse_command(&line) {
                 Ok(cmd) => match cmd {
-                    lazyspeak::protocol::Command::StartListening => {
+                    outloud::protocol::Command::StartListening => {
                         audio.set_listening(true);
                         let _ = event_tx.blocking_send(Event::Status {
                             state: State::Listening,
                         });
                     }
-                    lazyspeak::protocol::Command::StopListening
-                    | lazyspeak::protocol::Command::Cancel => {
+                    outloud::protocol::Command::StopListening
+                    | outloud::protocol::Command::Cancel => {
                         audio.set_listening(false);
                         let _ = event_tx.blocking_send(Event::Status { state: State::Idle });
                     }
-                    lazyspeak::protocol::Command::Shutdown => {
+                    outloud::protocol::Command::Shutdown => {
                         token.cancel();
                         break;
                     }
@@ -94,7 +94,7 @@ async fn stdin_command_loop(
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(io::stderr)
-        .with_env_filter("lazyspeak=debug")
+        .with_env_filter("outloud=debug")
         .init();
 
     // Unified event channel — all events flow through here to stdout.
