@@ -136,8 +136,8 @@ section("Install / STT Server")
 
 local install = require("outloud.install")
 assert_ok(type(install.run) == "function", "install.run()")
-assert_ok(type(install.start_server) == "function", "install.start_server()")
-assert_ok(type(install.stop_server) == "function", "install.stop_server()")
+assert_ok(type(install.start_whisper_server) == "function", "install.start_whisper_server()")
+assert_ok(type(install.stop_whisper_server) == "function", "install.stop_whisper_server()")
 assert_ok(type(install.DEFAULT_PORT) == "number", "install.DEFAULT_PORT")
 
 -- 6. Health check

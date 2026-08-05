@@ -347,9 +347,9 @@ local install = require("outloud.install")
 
 assert_type(install.DEFAULT_PORT, "number", "DEFAULT_PORT is a number")
 assert_type(install.run, "function", "install.run is a function")
-assert_type(install.start_server, "function", "start_server is a function")
-assert_type(install.stop_server, "function", "stop_server is a function")
-assert_type(install.probe_server, "function", "probe_server is a function")
+assert_type(install.start_whisper_server, "function", "start_whisper_server is a function")
+assert_type(install.stop_whisper_server, "function", "stop_whisper_server is a function")
+assert_type(install.probe_whisper_server, "function", "probe_whisper_server is a function")
 
 assert_eq(install.DEFAULT_PORT, 8674, "DEFAULT_PORT is 8674")
 
@@ -510,7 +510,7 @@ section("13. Daemon Environment")
 -- We can't access it directly, but we can verify the config values
 -- that would be used to build the env
 
-assert_eq(ls.config.model.server_port, 8674, "server_port for env")
+assert_eq(ls.config.model.server_port, 8000, "server_port for env")
 assert_eq(ls.config.audio.vad_threshold, 0.01, "vad_threshold for env")
 assert_eq(ls.config.audio.silence_duration_ms, 600, "silence_ms for env (custom)")
 assert_eq(ls.config.audio.max_duration_ms, 30000, "max_ms for env")

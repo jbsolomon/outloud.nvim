@@ -485,7 +485,7 @@ function M.start_whisper_server(opts, on_ready)
 end
 
 --- Ensure model exists, then spawn whisper-server.
-local function M._ensure_model_and_start(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
+M._ensure_model_and_start = function(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
 	local model = find_whisper_model(model_size, model_path)
 	if not model then
 		on_phase("downloading", "downloading model (" .. model_size .. ")")
@@ -507,7 +507,7 @@ local function M._ensure_model_and_start(bin, port, model_size, model_path, on_p
 end
 
 --- Spawn whisper-server and wait for it to become healthy.
-local function M._spawn_whisper_server(bin, model, port, on_phase, stall_ms, on_ready)
+M._spawn_whisper_server = function(bin, model, port, on_phase, stall_ms, on_ready)
 	vim.notify("[outloud] starting whisper-server on port " .. port .. " (model: " .. model .. ")...")
 
 	local phase = "starting"
