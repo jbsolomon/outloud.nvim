@@ -737,8 +737,8 @@ self.win = Snacks.win({
 			cursorline = false,
 		},
 		keys = {
-			q = "close",
-			["<C-c>"] = "close",
+			q = function() self:close() end,
+			["<C-c>"] = function() self:close() end,
 		},
 	})
 

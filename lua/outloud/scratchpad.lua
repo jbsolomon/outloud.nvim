@@ -87,8 +87,8 @@ function Scratchpad:show(text, iterating)
 			linebreak = true,
 		},
 		keys = {
-			q = "close",
-			["<C-c>"] = "close",
+			q = function() self.win:close() end,
+			["<C-c>"] = function() self.win:close() end,
 		},
 	})
 
