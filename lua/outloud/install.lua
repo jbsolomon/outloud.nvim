@@ -424,6 +424,13 @@ local function download_whisper_model(model_size, on_phase, on_done)
 					break
 				end
 			end
+		else
+			vim.schedule(function()
+				vim.notify(
+					"[outloud] HEAD request failed (curl exit " .. res.code .. "), progress will show size without total",
+					vim.log.levels.WARN
+				)
+			end)
 		end
 
 		-- Step 2: Start the actual download
@@ -464,6 +471,12 @@ local function download_whisper_model(model_size, on_phase, on_done)
 				on_phase("downloading", "100%")
 				on_done(true)
 			else
+				vim.schedule(function()
+					vim.notify(
+						"[outloud] model download failed (curl exit " .. res.code .. ")",
+						vim.log.levels.ERROR
+					)
+				end)
 				on_done(false, "failed to download model (curl exit " .. res.code .. ")")
 			end
 		end)
