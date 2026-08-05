@@ -4,7 +4,8 @@ Current state and planned work for outloud.nvim.
 
 ## Completed (v0.1–v0.4)
 
-- [x] Local STT via Voxtral Mini 3B (llama-server, GGUF Q4_K_M)
+- [x] Local STT via whisper-server (whisper.cpp GGML models, default) or llama-server (openai backend)
+- [x] Pluggable STT backends via `SpeechTranscriber` trait (`whisper`, `openai` features)
 - [x] Cross-platform audio capture (cpal: Core Audio, ALSA, WASAPI)
 - [x] Energy-based voice activity detection
 - [x] Push-to-talk and continuous listening modes
@@ -22,9 +23,9 @@ Current state and planned work for outloud.nvim.
 - [x] Full teardown on `VimLeavePre` so exiting never strands a process
 - [x] Non-blocking `llama-server` health probe with an idle-progress watchdog,
       replacing a `io.popen`+curl poll that could freeze the editor indefinitely
-- [x] Auto-managed llama-server lifecycle
+- [x] Auto-managed STT server lifecycle (whisper-server + llama-server, binary & model auto-download)
 - [x] Async/tokio pipeline architecture (streamsafe)
-- [x] `:LazySpeakInstall` (cargo build + model auto-download)
+- [x] `:OutloudInstall` (cargo build + model auto-download)
 
 ## Near-term
 
@@ -76,7 +77,7 @@ the same context it would have in a text-based IDE interaction.
 
 Publish platform binaries (macOS ARM, macOS x86, Linux ARM, Linux x86) via
 GitHub Releases. Eliminates the Rust toolchain requirement for end users.
-`:LazySpeakInstall` would download the appropriate binary instead of compiling.
+`:OutloudInstall` would download the appropriate binary instead of compiling.
 
 ## Mid-term
 
@@ -137,7 +138,7 @@ so the user doesn't need to look at the screen.
 ### ACP agent registry
 
 Browse and install agents from the ACP registry directly within Neovim.
-`:LazySpeakAgent browse` to discover available agents.
+`:OutloudAgent browse` to discover available agents.
 
 ### Multi-session support
 

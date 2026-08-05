@@ -35,16 +35,16 @@ local HEADER_H = 4
 --- Highlight groups, linked to standard groups so the sidebar inherits the
 --- user's colorscheme. `default = true` means an explicit user override wins.
 local HL_LINKS = {
-	OutLoudSignalUp = "DiagnosticOk",
-	OutLoudSignalStarting = "DiagnosticWarn",
-	OutLoudSignalDown = "Comment",
-	OutLoudSignalError = "DiagnosticError",
-	OutLoudPhase = "Identifier",
-	OutLoudHint = "Comment",
-	OutLoudRule = "WinSeparator",
-	OutLoudTurn = "Title",
-	OutLoudFail = "DiagnosticError",
-	OutLoudHelpTitle = "Title",
+	OutloudSignalUp = "DiagnosticOk",
+	OutloudSignalStarting = "DiagnosticWarn",
+	OutloudSignalDown = "Comment",
+	OutloudSignalError = "DiagnosticError",
+	OutloudPhase = "Identifier",
+	OutloudHint = "Comment",
+	OutloudRule = "WinSeparator",
+	OutloudTurn = "Title",
+	OutloudFail = "DiagnosticError",
+	OutloudHelpTitle = "Title",
 }
 
 local function define_highlights()
@@ -64,10 +64,10 @@ local NS = vim.api.nvim_create_namespace("outloud_sidebar")
 
 --- Signal glyph highlight per state.
 local SIGNAL_HL = {
-	down = "OutLoudSignalDown",
-	starting = "OutLoudSignalStarting",
-	up = "OutLoudSignalUp",
-	error = "OutLoudSignalError",
+	down = "OutloudSignalDown",
+	starting = "OutloudSignalStarting",
+	up = "OutloudSignalUp",
+	error = "OutloudSignalError",
 }
 
 local BUSY = {
@@ -327,7 +327,7 @@ function Sidebar:_render_header()
 		spans[#spans + 1] = {
 			from = #signal_line,
 			to = #signal_line + #glyph,
-			hl = SIGNAL_HL[item[2]] or "OutLoudSignalDown",
+		hl = SIGNAL_HL[item[2]] or "OutloudSignalDown",
 		}
 		signal_line = signal_line .. glyph .. " " .. item[1] .. "  "
 	end
@@ -355,17 +355,17 @@ function Sidebar:_render_header()
 	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 1, 0, {
 		end_row = 2,
 		end_col = 0,
-		hl_group = "OutLoudPhase",
+		hl_group = "OutloudPhase",
 	})
 	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 2, 0, {
 		end_row = 3,
 		end_col = 0,
-		hl_group = "OutLoudHint",
+		hl_group = "OutloudHint",
 	})
 	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 3, 0, {
 		end_row = 4,
 		end_col = 0,
-		hl_group = "OutLoudRule",
+		hl_group = "OutloudRule",
 	})
 end
 
@@ -428,7 +428,7 @@ function Sidebar:_entry_lines(e, w)
 end
 
 --- The key reference. Shown until the first turn arrives, and on demand via
---- `?` or `:OutLoudHelp`.
+--- `?` or `:OutloudHelp`.
 ---@param w number
 ---@return string[]
 function Sidebar:_help_lines(w)
@@ -517,11 +517,11 @@ function Sidebar:_highlight(start_row, lines, help_len)
 		local group
 
 		if i <= help_len then
-			group = (i == 1) and "OutLoudHelpTitle" or "OutLoudHint"
+			group = (i == 1) and "OutloudHelpTitle" or "OutloudHint"
 		elseif line:match("^[╭│╰]") then
-			group = "OutLoudTurn"
+			group = "OutloudTurn"
 		elseif line:match("^⏺ !") then
-			group = "OutLoudFail"
+			group = "OutloudFail"
 		end
 
 		if group then

@@ -7,8 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["http"]
-http = ["dep:reqwest", "dep:base64", "dep:hound"]
+default = ["whisper"]
+openai = ["dep:reqwest", "dep:base64", "dep:hound"]
+whisper = ["dep:reqwest", "dep:hound"]
 
 [dependencies]
 serde.workspace = true

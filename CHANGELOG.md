@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- Default STT backend changed from `llama-server` + Voxtral to `whisper-server` + Whisper GGML models
+- `OUTLOUD_STT_BACKEND` env var added (`whisper` default, `openai` for llama-server)
+- Default server port changed from 8674 to 8000 (whisper-server default)
+- Config now includes `backend` option (`"whisper"` or `"openai"`)
+
+### Features
+
+- `WhisperTranscriber` backend targeting whisper-server's `/inference` endpoint
+- Auto-download of whisper-server binary and Whisper GGML model on first run
+- Dual-backend support: `whisper` (default) and `openai` (OpenAI-compatible, llama-server)
+- Backend selection via `OUTLOUD_STT_BACKEND` env var or `config.backend`
+- Config `model.size` option for Whisper model size selection
+- Backend-aware health checks in `:checkhealth outloud`
+
+### Refactoring
+
+- Renamed Rust feature `http` → `openai` (targets OpenAI-compatible endpoints)
+- `build_daemon_env()` now accepts backend parameter for correct default port
+
 ## 0.6.0 (2026-07-25)
 
 ### Features

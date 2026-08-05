@@ -345,15 +345,13 @@ section("8. Install Module")
 
 local install = require("outloud.install")
 
-assert_type(install.HF_REPO, "string", "HF_REPO is a string")
 assert_type(install.DEFAULT_PORT, "number", "DEFAULT_PORT is a number")
 assert_type(install.run, "function", "install.run is a function")
-assert_type(install.start_llama_server, "function", "start_llama_server is a function")
-assert_type(install.stop_llama_server, "function", "stop_llama_server is a function")
+assert_type(install.start_server, "function", "start_server is a function")
+assert_type(install.stop_server, "function", "stop_server is a function")
 assert_type(install.probe_server, "function", "probe_server is a function")
 
 assert_eq(install.DEFAULT_PORT, 8674, "DEFAULT_PORT is 8674")
-assert_ok(install.HF_REPO:match("Voxtral"), "HF_REPO contains 'Voxtral'")
 
 -- ============================================================================
 -- Test 9: Health Check

@@ -9,15 +9,35 @@ use outloud::transcribe::SpeechTranscriber;
 use streamsafe::PipelineBuilder;
 use tokio_util::sync::CancellationToken;
 
-/// Build the HTTP transcription backend from environment variables.
+/// Build the transcription backend from environment variables.
 ///
-/// OUTLOUD_STT_URL — server URL (default http://127.0.0.1:8674)
+/// OUTLOUD_STT_BACKEND — backend name: "whisper" (default) or "openai"
+/// OUTLOUD_STT_URL — server URL (default depends on backend)
 fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
-    use outloud::transcribe::http::{DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig};
-    let server_url =
-        std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
-    let transcriber = HttpTranscriber::new(HttpTranscriberConfig { server_url });
-    Ok(Box::new(transcriber))
+    let backend =
+        std::env::var("OUTLOUD_STT_BACKEND").unwrap_or_else(|_| "whisper".to_string());
+
+    match backend.as_str() {
+        #[cfg(feature = "whisper")]
+        "whisper" => {
+            use outloud::transcribe::whisper::{
+                DEFAULT_SERVER_URL, WhisperTranscriber, WhisperTranscriberConfig,
+            };
+            let server_url =
+                std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+            Ok(Box::new(WhisperTranscriber::new(WhisperTranscriberConfig { server_url })))
+        }
+        #[cfg(feature = "openai")]
+        "openai" => {
+            use outloud::transcribe::http::{
+                DEFAULT_SERVER_URL, HttpTranscriber, HttpTranscriberConfig,
+            };
+            let server_url =
+                std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+            Ok(Box::new(HttpTranscriber::new(HttpTranscriberConfig { server_url })))
+        }
+        _ => anyhow::bail!("unknown STT backend: {}", backend),
+    }
 }
 
 /// Drains the event channel and writes JSON lines to stdout.

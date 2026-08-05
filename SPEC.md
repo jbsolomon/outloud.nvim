@@ -150,7 +150,7 @@ Every adapter implements `outloud.Adapter`. The plugin never talks protocol-spec
 - A turn that changes nothing discards its snapshot, guarded by a content
   fingerprint of `git diff HEAD` (porcelain names which files differ, not how,
   so it missed edits to already-modified files)
-- Eviction past `max_stack`, `:OutLoudStop`, and exit all delete stored copies;
+- Eviction past `max_stack`, `:OutloudStop`, and exit all delete stored copies;
   startup sweeps session dirs older than `max_age_days`
 - Requires a git repository: without it there is no cheap way to know which
   files a turn might touch
@@ -417,7 +417,7 @@ would not work from wherever the cursor is. `?` and `q` are local to the sidebar
 window and are labelled as such in the reference block.
 
 **Discovery.** The key reference occupies the conversation region until the first
-entry arrives, then gives way to it. `?` (or `:OutLoudHelp`) brings it back
+entry arrives, then gives way to it. `?` (or `:OutloudHelp`) brings it back
 above the conversation without disturbing the entries.
 
 **Conversation.** Held as a list of typed entries, not appended text. That is
@@ -435,8 +435,8 @@ ask and the resolution as a single entry.
 
 | Action | Sidebar window | Conversation buffer | Daemon |
 |--------|---------------|--------------------|--------|
-| `<Esc>` / `:OutLoudDismiss` | closed | kept | running |
-| `:OutLoudStop` | closed | deleted | stopped |
+| `<Esc>` / `:OutloudDismiss` | closed | kept | running |
+| `:OutloudStop` | closed | deleted | stopped |
 | Exit Neovim (`VimLeavePre`) | closed | deleted | stopped |
 
 Shutdown is wired to `VimLeavePre`, so quitting never strands the daemon,
@@ -446,18 +446,18 @@ Shutdown is wired to `VimLeavePre`, so quitting never strands the daemon,
 
 | Command | Description |
 |---------|-------------|
-| `:OutLoudStart` | Start daemon + agent |
-| `:OutLoudStop` | Stop everything and tear down the UI |
-| `:OutLoudStatus` | Show daemon/agent/model status |
-| `:OutLoudSidebar` | Toggle the session sidebar |
-| `:OutLoudHelp` | Toggle the key reference in the sidebar |
-| `:OutLoudDismiss` | Hide the sidebar, leave the daemon running |
-| `:OutLoudUndo` | Revert last agent edit |
-| `:OutLoudSnapshots` | List snapshots for current session |
-| `:OutLoudSnapshotsPrune` | Drop orphaned `outloud:` stash entries |
-| `:OutLoudInstall` | Build and install the daemon binary |
+| `:OutloudStart` | Start daemon + agent |
+| `:OutloudStop` | Stop everything and tear down the UI |
+| `:OutloudStatus` | Show daemon/agent/model status |
+| `:OutloudSidebar` | Toggle the session sidebar |
+| `:OutloudHelp` | Toggle the key reference in the sidebar |
+| `:OutloudDismiss` | Hide the sidebar, leave the daemon running |
+| `:OutloudUndo` | Revert last agent edit |
+| `:OutloudSnapshots` | List snapshots for current session |
+| `:OutloudSnapshotsPrune` | Drop orphaned `outloud:` stash entries |
+| `:OutloudInstall` | Build and install the daemon binary |
 
-Planned, not yet implemented: `:OutLoudHistory`, `:OutLoudAgent [cmd]`.
+Planned, not yet implemented: `:OutloudHistory`, `:OutloudAgent [cmd]`.
 
 ## Configuration
 
@@ -574,14 +574,14 @@ Plugin ↔ Rust daemon over stdin/stdout JSON lines.
 ```lua
 {
   "urmzd/outloud.nvim",
-  build = ":OutLoudInstall",
+  build = ":OutloudInstall",
   opts = {
     agent = { adapter = "claudecode" },
   },
 }
 ```
 
-### 2. `:OutLoudInstall` automates:
+### 2. `:OutloudInstall` automates:
 
 - Downloads Voxtral GGUF model (~2.5 GB) to `~/.local/share/outloud/`
 - Builds and installs the `outloud` daemon binary via `cargo install`
@@ -617,7 +617,7 @@ outloud.nvim/
 │       ├── voice.lua         -- spawn/manage Rust daemon (jobstart)
 │       ├── core.lua          -- IR types, voice command interception, adapter dispatch
 │       ├── snapshot.lua      -- git stash snapshots, undo/revert
-│       ├── install.lua       -- :OutLoudInstall (model download + cargo build)
+│       ├── install.lua       -- :OutloudInstall (model download + cargo build)
 │       ├── adapters/
 │       │   ├── acp.lua       -- ACP adapter (JSON-RPC 2.0 / stdio)
 │       │   └── claudecode.lua -- Claude Code adapter (CLI pipe)

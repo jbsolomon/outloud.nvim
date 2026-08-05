@@ -4,6 +4,18 @@ local DEFAULT_PORT = 8674
 local HEALTH_PATH = "/health"
 local HF_REPO = "ggml-org/Voxtral-Mini-3B-2507-GGUF"
 
+-- Whisper-server defaults
+local WHISPER_DEFAULT_PORT = 8000
+local WHISPER_HEALTH_PATH = "/"
+local WHISPER_MODEL_SIZES = {
+    tiny = "ggml-tiny.bin",
+    base = "ggml-base.bin",
+    small = "ggml-small.bin",
+    medium = "ggml-medium.bin",
+    large = "ggml-large.bin",
+}
+local WHISPER_MODEL_REPO = "ggerganov/whisper.cpp"
+
 --- Install daemon binary (model is auto-downloaded by llama-server via -hf).
 function M.run()
 	-- Build daemon binary
@@ -39,7 +51,7 @@ function M.run()
 		vim.notify("[outloud] daemon binary already installed")
 	end
 
-	vim.notify("[outloud] model will be auto-downloaded on first :LazySpeakStart via llama-server -hf " .. HF_REPO)
+	vim.notify("[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO)
 end
 
 -- llama-server process management
@@ -268,7 +280,342 @@ function M.stop_llama_server()
 	end
 end
 
+-- whisper-server process management
+
+---@type number?
+M._whisper_job_id = nil
+
+--- Get the data directory for outloud artifacts.
+---@return string
+local function data_dir()
+	local base = vim.fn.expand("$XDG_DATA_HOME")
+	if base == "" or base == "v:null" then
+		base = vim.fn.expand("~/.local/share")
+	end
+	local d = base .. "/outloud"
+	vim.fn.mkdir(d, "p")
+	return d
+end
+
+--- Resolve the whisper-server binary path.
+--- Checks: explicit path, then data_dir/bin, then PATH.
+---@return string|nil
+local function find_whisper_server()
+	-- Check PATH first
+	if vim.fn.executable("whisper-server") == 1 then
+		return "whisper-server"
+	end
+	-- Check data dir
+	local candidate = data_dir() .. "/bin/whisper-server"
+	if vim.fn.filereadable(candidate) == 1 then
+		return candidate
+	end
+	return nil
+end
+
+--- Resolve the whisper model path.
+--- Checks: explicit path, then data_dir/models, then nil.
+---@param model_size string
+---@param model_path? string
+---@return string|nil
+local function find_whisper_model(model_size, model_path)
+	if model_path and vim.fn.filereadable(model_path) == 1 then
+		return model_path
+	end
+	local fname = WHISPER_MODEL_SIZES[model_size] or WHISPER_MODEL_SIZES.medium
+	local candidate = data_dir() .. "/models/" .. fname
+	if vim.fn.filereadable(candidate) == 1 then
+		return candidate
+	end
+	return nil
+end
+
+--- Download the whisper-server binary for the current platform.
+---@param on_done fun(ok: boolean, detail?: string)
+local function download_whisper_server(on_done)
+	local os_name = vim.uv.os_uname()
+	local sysname = os_name and os_name.sysname or "Unknown"
+	local platform = sysname:lower()
+
+	local bin_dir = data_dir() .. "/bin"
+	vim.fn.mkdir(bin_dir, "p")
+	local dest = bin_dir .. "/whisper-server"
+
+	-- Build download URL from GitHub releases
+	local arch = vim.uv.os_uname() and vim.uv.os_uname().machine or "x86_64"
+	local url
+
+	if platform:find("darwin") then
+		if arch:find("arm") or arch:find("aarch") then
+			url = "https://github.com/fstirl/whisper-server/releases/latest/download/whisper-server-darwin-arm64"
+		else
+			url = "https://github.com/fstirl/whisper-server/releases/latest/download/whisper-server-darwin-amd64"
+		end
+	elseif platform:find("linux") then
+		if arch:find("arm") or arch:find("aarch") then
+			url = "https://github.com/fstirl/whisper-server/releases/latest/download/whisper-server-linux-arm64"
+		else
+			url = "https://github.com/fstirl/whisper-server/releases/latest/download/whisper-server-linux-amd64"
+		end
+	else
+		on_done(false, "unsupported platform: " .. sysname)
+		return
+	end
+
+	vim.notify("[outloud] downloading whisper-server...", vim.log.levels.INFO)
+
+	vim.system({
+		"curl",
+		"-fSL",
+		"--output",
+		dest,
+		url,
+	}, {}, function(res)
+		if res.code == 0 then
+			vim.fn.execute("chmod +x " .. dest)
+			on_done(true)
+		else
+			on_done(false, "failed to download whisper-server (curl exit " .. res.code .. ")")
+		end
+	end)
+end
+
+--- Download a whisper model from HuggingFace.
+---@param model_size string
+---@param on_done fun(ok: boolean, detail?: string)
+local function download_whisper_model(model_size, on_done)
+	local fname = WHISPER_MODEL_SIZES[model_size] or WHISPER_MODEL_SIZES.medium
+	local model_dir = data_dir() .. "/models"
+	vim.fn.mkdir(model_dir, "p")
+	local dest = model_dir .. "/" .. fname
+
+	-- HuggingFace direct download URL
+	local url = "https://huggingface.co/" .. WHISPER_MODEL_REPO .. "/resolve/main/" .. fname
+
+	vim.notify("[outloud] downloading whisper model (" .. model_size .. ")...", vim.log.levels.INFO)
+
+	vim.system({
+		"curl",
+		"-fSL",
+		"--output",
+		dest,
+		url,
+	}, {}, function(res)
+		if res.code == 0 and vim.fn.filereadable(dest) == 1 then
+			on_done(true)
+		else
+			on_done(false, "failed to download model (curl exit " .. res.code .. ")")
+		end
+	end)
+end
+
+--- Probe whisper-server health.
+---@param port number
+---@param cb fun(ok: boolean)
+function M.probe_whisper_server(port, cb)
+	local url = string.format("http://127.0.0.1:%d%s", port, WHISPER_HEALTH_PATH)
+	local ok, err = pcall(vim.system, {
+		"curl",
+		"-sf",
+		"--connect-timeout",
+		"1",
+		"--max-time",
+		"2",
+		url,
+	}, { text = true }, function(res)
+		vim.schedule(function()
+			cb(res.code == 0)
+		end)
+	end)
+	if not ok then
+		vim.schedule(function()
+			vim.notify("[outloud] whisper health probe failed: " .. tostring(err), vim.log.levels.WARN)
+			cb(false)
+		end)
+	end
+end
+
+--- Start whisper-server with the specified model.
+--- Auto-downloads binary and model if missing.
+---@param opts? { port?: number, model_size?: string, model_path?: string, on_phase?: fun(phase: string, detail?: string), stall_timeout_ms?: number }
+---@param on_ready? fun()
+function M.start_whisper_server(opts, on_ready)
+	opts = opts or {}
+	local port = opts.port or WHISPER_DEFAULT_PORT
+	local model_size = opts.model_size or "medium"
+	local model_path = opts.model_path
+	local on_phase = opts.on_phase or function() end
+	local stall_ms = opts.stall_timeout_ms or DEFAULT_STALL_MS
+
+	-- Already managed
+	if M._whisper_job_id then
+		if on_ready then
+			on_ready()
+		end
+		return
+	end
+
+	-- Check if something else is already listening
+	M.probe_whisper_server(port, function(alive)
+		if alive then
+			vim.notify("[outloud] whisper-server already running on port " .. port)
+			on_phase("ready")
+			if on_ready then
+				on_ready()
+			end
+			return
+		end
+
+		-- Check for binary
+		local bin = find_whisper_server()
+		if not bin then
+			on_phase("downloading", "downloading whisper-server")
+			download_whisper_server(function(ok, detail)
+				if not ok then
+					on_phase("error", detail or "failed to download whisper-server")
+					return
+				end
+				bin = find_whisper_server()
+				M._ensure_model_and_start(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
+			end)
+		else
+			M._ensure_model_and_start(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
+		end
+	end)
+end
+
+--- Ensure model exists, then spawn whisper-server.
+local function M._ensure_model_and_start(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
+	local model = find_whisper_model(model_size, model_path)
+	if not model then
+		on_phase("downloading", "downloading model (" .. model_size .. ")")
+		download_whisper_model(model_size, function(ok, detail)
+			if not ok then
+				on_phase("error", detail or "failed to download model")
+				return
+			end
+			model = find_whisper_model(model_size, model_path)
+			if not model then
+				on_phase("error", "model download succeeded but file not found")
+				return
+			end
+			M._spawn_whisper_server(bin, model, port, on_phase, stall_ms, on_ready)
+		end)
+	else
+		M._spawn_whisper_server(bin, model, port, on_phase, stall_ms, on_ready)
+	end
+end
+
+--- Spawn whisper-server and wait for it to become healthy.
+local function M._spawn_whisper_server(bin, model, port, on_phase, stall_ms, on_ready)
+	vim.notify("[outloud] starting whisper-server on port " .. port .. " (model: " .. model .. ")...")
+
+	local phase = "starting"
+	local last_progress = vim.uv.now()
+
+	local function observe(line)
+		last_progress = vim.uv.now()
+		if line:match("loading model") or line:match("ggml") or line:match("whisper") then
+			if phase ~= "loading" then
+				phase = "loading"
+				on_phase("loading")
+			end
+		end
+	end
+
+	local function drain(data)
+		for _, line in ipairs(data or {}) do
+			if line ~= "" then
+				observe(line)
+			end
+		end
+	end
+
+	M._whisper_job_id = vim.fn.jobstart({
+		bin,
+		"--model",
+		model,
+		"--port",
+		tostring(port),
+	}, {
+		on_stdout = function(_, data, _) drain(data) end,
+		on_stderr = function(_, data, _) drain(data) end,
+		on_exit = function(_, code, _)
+			M._whisper_job_id = nil
+			if code ~= 0 then
+				vim.schedule(function()
+					vim.notify("[outloud] whisper-server exited with code " .. code, vim.log.levels.WARN)
+				end)
+			end
+		end,
+	})
+
+	if M._whisper_job_id and M._whisper_job_id <= 0 then
+		vim.notify("[outloud] failed to start whisper-server", vim.log.levels.ERROR)
+		M._whisper_job_id = nil
+		on_phase("error", "failed to spawn whisper-server")
+		return
+	end
+
+	local timer = vim.uv.new_timer()
+	local finished = false
+	local in_flight = false
+
+	local function finish(ok, message)
+		if finished then
+			return
+		end
+		finished = true
+		timer:stop()
+		if not timer:is_closing() then
+			timer:close()
+		end
+		if ok then
+			vim.notify("[outloud] whisper-server ready")
+			on_phase("ready")
+			if on_ready then
+				on_ready()
+			end
+		else
+			vim.notify("[outloud] " .. (message or "whisper-server failed"), vim.log.levels.ERROR)
+			on_phase("error", message)
+		end
+	end
+
+	timer:start(500, 1000, vim.schedule_wrap(function()
+		if finished then
+			return
+		end
+		if M._whisper_job_id == nil then
+			return finish(false, "whisper-server exited before becoming ready")
+		end
+		if vim.uv.now() - last_progress > stall_ms then
+			return finish(false, ("whisper-server made no progress for %ds"):format(math.floor(stall_ms / 1000)))
+		end
+		if in_flight then
+			return
+		end
+		in_flight = true
+		M.probe_whisper_server(port, function(alive)
+			in_flight = false
+			if alive then
+				last_progress = vim.uv.now()
+				finish(true)
+			end
+		end)
+	end))
+end
+
+--- Stop the managed whisper-server process.
+function M.stop_whisper_server()
+	if M._whisper_job_id then
+		vim.fn.jobstop(M._whisper_job_id)
+		M._whisper_job_id = nil
+	end
+end
+
 M.HF_REPO = HF_REPO
 M.DEFAULT_PORT = DEFAULT_PORT
+M.WHISPER_DEFAULT_PORT = WHISPER_DEFAULT_PORT
 
 return M

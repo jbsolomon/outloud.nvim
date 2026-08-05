@@ -56,7 +56,7 @@ Each request is roughly the same size (~5s of audio). Constant cost. No wasted r
 
 **`crates/outloud/src/audio.rs`**
 - Replace `partial_gate` with a **sliding window buffer**: maintain a ring buffer of audio samples
-- Window size configurable via `LAZYSPEAK_WINDOW_MS` (default 5000ms)
+- Window size configurable via `OUTLOUD_WINDOW_MS` (default 5000ms)
 - On partial emission, extract only the window's worth of audio (not the full buffer)
 - Remove the "clone entire buffer" approach; instead slice the ring buffer
 
@@ -79,7 +79,7 @@ Each request is roughly the same size (~5s of audio). Constant cost. No wasted r
 - Pass window metadata through to `Event::Partial`
 
 **`crates/outloud/src/main.rs`**
-- Read `LAZYSPEAK_WINDOW_MS` env var (default 5000)
+- Read `OUTLOUD_WINDOW_MS` env var (default 5000)
 - Pass to audio capture for window sizing
 
 #### Plugin (Lua)
@@ -99,7 +99,7 @@ Each request is roughly the same size (~5s of audio). Constant cost. No wasted r
     live_buffer = true,      -- enable live buffer updates from partials
   },
   ```
-- Build env var: `LAZYSPEAK_WINDOW_MS`
+- Build env var: `OUTLOUD_WINDOW_MS`
 - On final transcript (`Utterance` event), replace the partial insertion range with the complete transcript
 
 **`lua/outloud/sidebar.lua`**
@@ -133,7 +133,7 @@ require("outloud").setup({
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LAZYSPEAK_WINDOW_MS` | `5000` | Sliding window size in milliseconds |
+| `OUTLOUD_WINDOW_MS` | `5000` | Sliding window size in milliseconds |
 
 ---
 
@@ -439,7 +439,7 @@ When both are enabled, sliding window chunks feed into the scratchpad buffer, gi
 1. **Daemon**: Replace full-buffer clone with ring buffer in `audio.rs`
 2. **Daemon**: Add `window_start_ms`, `window_end_ms`, `seq` to `Partial` event in `protocol.rs`
 3. **Daemon**: Remove `GateGuard`, implement latest-wins drop policy in `transform.rs`
-4. **Daemon**: Read `LAZYSPEAK_WINDOW_MS` env var in `main.rs`
+4. **Daemon**: Read `OUTLOUD_WINDOW_MS` env var in `main.rs`
 5. **Plugin**: Track insertion range in `voice.lua`, replace on each partial
 6. **Plugin**: Final transcript replaces partial range in `init.lua`
 7. **Tests**: Integration tests for sliding window partials + buffer merging
@@ -492,7 +492,7 @@ When both are enabled, sliding window chunks feed into the scratchpad buffer, gi
 - `crates/outloud/src/audio.rs` — sliding window ring buffer, remove full-buffer clone
 - `crates/outloud/src/protocol.rs` — window metadata on `Partial` event
 - `crates/outloud/src/pipeline/transform.rs` — remove `GateGuard`, latest-wins policy
-- `crates/outloud/src/main.rs` — `LAZYSPEAK_WINDOW_MS` config
+- `crates/outloud/src/main.rs` — `OUTLOUD_WINDOW_MS` config
 - `lua/outloud/sidebar.lua` — accumulation entry display
 - `lua/outloud/health.lua` — check CodeCompanion availability
 - `SPEC.md` — documentation update

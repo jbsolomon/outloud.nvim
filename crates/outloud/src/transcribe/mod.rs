@@ -3,10 +3,14 @@
 //! Defines the `SpeechTranscriber` trait — the single abstraction that
 //! decouples the daemon from any particular inference runtime.
 //!
-//! Backend:
-//! - `http`  — delegates to an external server (llama-server, vLLM, etc.)
+//! Backends:
+//! - `whisper` — delegates to whisper-server (default)
+//! - `openai`  — delegates to an OpenAI-compatible server (llama-server, vLLM, etc.)
 
-#[cfg(feature = "http")]
+#[cfg(feature = "whisper")]
+pub mod whisper;
+
+#[cfg(feature = "openai")]
 pub mod http;
 
 use anyhow::Result;

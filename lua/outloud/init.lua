@@ -7,7 +7,8 @@ local install = require("outloud.install")
 local M = {}
 
 ---@class outloud.Config
----@field model { path: string, server_port: number, server_url?: string }
+---@field backend? string "whisper" (default) or "openai" (OpenAI-compatible)
+---@field model { size?: string, path?: string, hf_repo?: string, server_port: number, server_url?: string }
 ---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean }
 ---@field accumulator { enabled: boolean, mode: string, handler?: table, context: table }
 ---@field ui { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
@@ -16,10 +17,12 @@ local M = {}
 
 ---@type outloud.Config
 M.defaults = {
+	backend = "whisper",
 	model = {
-		hf_repo = install.HF_REPO,
-		server_port = install.DEFAULT_PORT,
-		-- server_url = "http://127.0.0.1:8674",  -- override to use external server
+		size = "medium",           -- whisper model size: "tiny", "base", "small", "medium", "large"
+		hf_repo = install.HF_REPO, -- for openai backend: llama-server HuggingFace repo
+		server_port = install.WHISPER_DEFAULT_PORT,
+		-- server_url = "http://127.0.0.1:8000",  -- override to use external server
 	},
 	audio = {
 		sample_rate = 16000,
@@ -184,12 +187,15 @@ function M.setup(opts)
 end
 
 --- Build the environment variable table for the daemon process.
+---@param backend string
 ---@param model table the model config table
 ---@param audio table the audio config table
 ---@return table<string, string>
-local function build_daemon_env(model, audio)
-	local url = model.server_url or ("http://127.0.0.1:" .. model.server_port)
+local function build_daemon_env(backend, model, audio)
+	local default_port = (backend == "whisper") and install.WHISPER_DEFAULT_PORT or install.DEFAULT_PORT
+	local url = model.server_url or ("http://127.0.0.1:" .. (model.server_port or default_port))
 	return {
+		OUTLOUD_STT_BACKEND = backend,
 		OUTLOUD_STT_URL = url,
 		OUTLOUD_VAD_THRESHOLD = tostring(audio.vad_threshold),
 		OUTLOUD_SILENCE_MS = tostring(audio.silence_duration_ms),
@@ -199,11 +205,13 @@ local function build_daemon_env(model, audio)
 	}
 end
 
---- Start voice + UI, auto-launching llama-server if needed.
+--- Start voice + UI, auto-launching the STT server if needed.
 function M.start()
 	if M._voice and M._voice:is_running() then
 		return
 	end
+
+	local backend = M.config.backend or "whisper"
 
 	local function ui_state(state, detail)
 		vim.schedule(function()
@@ -217,31 +225,45 @@ function M.start()
 		end)
 	end
 
-	-- If using the built-in server (no custom server_url), auto-start llama-server
+	local function on_server_phase(phase, detail)
+		if phase == "downloading" then
+			ui_state("downloading_model", detail)
+		elseif phase == "loading" then
+			ui_state("loading_model")
+		elseif phase == "ready" then
+			signal("stt", "up")
+		elseif phase == "error" then
+			signal("stt", "error")
+			ui_state("inactive", detail)
+		end
+	end
+
+	local function on_server_ready()
+		signal("stt", "up")
+		ui_state("starting_daemon")
+		M._start_pipeline()
+		ui_state("ready")
+	end
+
+	-- If using the built-in server (no custom server_url), auto-start
 	if not M.config.model.server_url then
 		signal("stt", "starting")
 		ui_state("starting_server")
-		install.start_llama_server({
-			port = M.config.model.server_port,
-			hf_repo = M.config.model.hf_repo,
-			on_phase = function(phase, detail)
-				if phase == "downloading" then
-					ui_state("downloading_model", detail)
-				elseif phase == "loading" then
-					ui_state("loading_model")
-				elseif phase == "ready" then
-					signal("stt", "up")
-				elseif phase == "error" then
-					signal("stt", "error")
-					ui_state("inactive", detail)
-				end
-			end,
-		}, function()
-			signal("stt", "up")
-			ui_state("starting_daemon")
-			M._start_pipeline()
-			ui_state("ready")
-		end)
+
+		if backend == "whisper" then
+			install.start_whisper_server({
+				port = M.config.model.server_port or install.WHISPER_DEFAULT_PORT,
+				model_size = M.config.model.size or "medium",
+				model_path = M.config.model.path,
+				on_phase = on_server_phase,
+			}, on_server_ready)
+		else
+			install.start_llama_server({
+				port = M.config.model.server_port or install.DEFAULT_PORT,
+				hf_repo = M.config.model.hf_repo,
+				on_phase = on_server_phase,
+			}, on_server_ready)
+		end
 	else
 		signal("stt", "up")
 		ui_state("starting_daemon")
@@ -263,7 +285,8 @@ function M._start_pipeline()
 	end
 
 	-- Initialize voice daemon
-	local daemon_env = build_daemon_env(M.config.model, M.config.audio)
+	local backend = M.config.backend or "whisper"
+	local daemon_env = build_daemon_env(backend, M.config.model, M.config.audio)
 	M._voice = Voice:new({ daemon_cmd = M.config.daemon_cmd, env = daemon_env })
 
 	-- Set up accumulator if enabled
@@ -381,9 +404,14 @@ function M.stop()
 		pcall(function()
 			M._voice:stop()
 		end)
-		M._voice = nil
+	M._voice = nil
 	end
-	install.stop_llama_server()
+	local backend = M.config.backend or "whisper"
+	if backend == "whisper" then
+		install.stop_whisper_server()
+	else
+		install.stop_llama_server()
+	end
 
 	if M._sidebar then
 		M._sidebar:dispose()

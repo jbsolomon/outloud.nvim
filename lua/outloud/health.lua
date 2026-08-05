@@ -13,13 +13,25 @@ function M.check()
 		})
 	end
 
-	-- llama-server (STT inference)
-	if vim.fn.executable("llama-server") == 1 then
-		vim.health.ok("llama-server found")
+	-- STT server (depends on backend)
+	local backend = M.config and M.config.backend or "whisper"
+	if backend == "whisper" then
+		if vim.fn.executable("whisper-server") == 1 then
+			vim.health.ok("whisper-server found")
+		else
+			vim.health.warn("whisper-server not found (needed for whisper STT backend)", {
+				"Will be auto-downloaded on first :OutloudStart",
+				"Or manually download from: github.com/fstirl/whisper-server/releases",
+			})
+		end
 	else
-		vim.health.warn("llama-server not found (needed for STT)", {
-			"Install: brew install llama.cpp",
-		})
+		if vim.fn.executable("llama-server") == 1 then
+			vim.health.ok("llama-server found")
+		else
+			vim.health.warn("llama-server not found (needed for openai STT backend)", {
+				"Install: brew install llama.cpp",
+			})
+		end
 	end
 
 	-- Plugin state
