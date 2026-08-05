@@ -740,6 +740,7 @@ self.win = Snacks.win({
 		keys = {
 			q = function() self:close() end,
 			["<C-c>"] = function() self:close() end,
+			["?"] = function() self:toggle_help() end,
 		},
 	})
 

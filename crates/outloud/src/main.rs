@@ -154,6 +154,12 @@ async fn stdin_command_loop(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Handle --version flag before initializing anything else
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
+
     tracing_subscriber::fmt()
         .with_writer(io::stderr)
         .with_env_filter("outloud=debug")

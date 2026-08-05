@@ -16,52 +16,129 @@ local WHISPER_MODEL_SIZES = {
 }
 local WHISPER_MODEL_REPO = "ggerganov/whisper.cpp"
 
---- Install daemon binary (model is auto-downloaded by llama-server via -hf).
-function M.run()
-	-- Build daemon binary
-	if vim.fn.executable("outloud") == 0 then
-		vim.notify("[outloud] building daemon binary...")
-		local plugin_dir = debug.getinfo(1, "S").source:match("@(.*/)" )
-		if plugin_dir then
-			plugin_dir = plugin_dir:gsub("/lua/outloud/$", "")
-		end
+--- Resolve the plugin root directory.
+---@return string
+local function plugin_dir()
+	local src = debug.getinfo(1, "S").source:match("@(.*/)")
+	if src then
+		return src:gsub("/lua/outloud/$", "")
+	end
+	return ""
+end
 
-		if plugin_dir and vim.fn.isdirectory(plugin_dir .. "/crates") == 1 then
-			vim.fn.jobstart({ "cargo", "install", "--path", plugin_dir .. "/crates/outloud" }, {
-				on_exit = function(_, code, _)
-					vim.schedule(function()
-						if code == 0 then
-							vim.notify("[outloud] daemon binary installed")
-						else
-							vim.notify(
-								"[outloud] daemon build failed — run `cargo install --path crates/outloud` manually",
-								vim.log.levels.ERROR
-							)
-						end
-					end)
-				end,
-			})
-		else
-			vim.notify(
-				"[outloud] could not find crates/ dir — run `cargo install --path crates/outloud` manually",
-				vim.log.levels.WARN
-			)
+--- Read the expected daemon version from Cargo.toml.
+---@return string|nil
+local function cargo_version()
+	local toml_path = plugin_dir() .. "/Cargo.toml"
+	if vim.fn.filereadable(toml_path) ~= 1 then
+		return nil
+	end
+	for line in io.lines(toml_path) do
+		local v = line:match("^version%s*=%s*%[(.+)%]")
+		if v then
+			return v:match("%s*(.-)%s*")
 		end
-	else
-		vim.notify("[outloud] daemon binary already installed")
+	end
+	return nil
+end
+
+--- Run `outloud --version` and return the output.
+---@return string|nil
+local function daemon_version()
+	if vim.fn.executable("outloud") ~= 1 then
+		return nil
+	end
+	local ok, res = pcall(vim.system, { "outloud", "--version" }, { text = true })
+	if ok and res and res.code == 0 then
+		return (res.stdout:gsub("%s+", ""))
+	end
+	return nil
+end
+
+--- Check if the daemon needs rebuilding.
+---@return boolean
+local function needs_rebuild()
+	local expected = cargo_version()
+	if not expected then
+		-- No Cargo.toml found, assume no rebuild needed
+		return false
+	end
+	local actual = daemon_version()
+	if not actual then
+		-- Daemon not installed, needs build
+		return true
+	end
+	return expected ~= actual
+end
+
+--- Build the daemon binary.
+---@param cb fun(ok: boolean)
+local function build_daemon(cb)
+	local pdir = plugin_dir()
+	if not pdir or vim.fn.isdirectory(pdir .. "/crates") ~= 1 then
+		vim.notify(
+			"[outloud] could not find crates/ dir — run `cargo install --path crates/outloud` manually",
+			vim.log.levels.WARN
+		)
+		cb(false)
+		return
 	end
 
-	-- Show backend-appropriate model info
-	local outloud = require("outloud")
-	local cfg = outloud.config.backend or outloud.defaults.backend or "whisper"
-	if cfg == "openai" then
-		vim.notify(
-			"[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO
-		)
+	vim.notify("[outloud] building daemon binary...")
+	vim.fn.jobstart({ "cargo", "install", "--path", pdir .. "/crates/outloud" }, {
+		on_exit = function(_, code, _)
+			vim.schedule(function()
+				if code == 0 then
+					vim.notify("[outloud] daemon binary installed")
+					cb(true)
+				else
+					vim.notify(
+						"[outloud] daemon build failed — run `cargo install --path crates/outloud` manually",
+						vim.log.levels.ERROR
+					)
+					cb(false)
+				end
+			end)
+		end,
+	})
+end
+
+--- Install daemon binary (model is auto-downloaded by llama-server via -hf).
+function M.run()
+	if needs_rebuild() then
+		build_daemon(function(ok)
+			if not ok then
+				return
+			end
+
+			-- Show backend-appropriate model info
+			local outloud = require("outloud")
+			local cfg = outloud.config.backend or outloud.defaults.backend or "whisper"
+			if cfg == "openai" then
+				vim.notify(
+					"[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO
+				)
+			else
+				vim.notify(
+					"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. (outloud.config.model and outloud.config.model.size or outloud.defaults.model.size) .. ")"
+				)
+			end
+		end)
 	else
-		vim.notify(
-			"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. (outloud.config.model and outloud.config.model.size or outloud.defaults.model.size) .. ")"
-		)
+		vim.notify("[outloud] daemon binary already installed")
+
+		-- Show backend-appropriate model info
+		local outloud = require("outloud")
+		local cfg = outloud.config.backend or outloud.defaults.backend or "whisper"
+		if cfg == "openai" then
+			vim.notify(
+				"[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO
+			)
+		else
+			vim.notify(
+				"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. (outloud.config.model and outloud.config.model.size or outloud.defaults.model.size) .. ")"
+			)
+		end
 	end
 end
 
@@ -165,6 +242,7 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 
 	local phase = "starting"
 	local last_progress = vim.uv.now()
+	local output_buf = {}
 
 	--- Classify a line of server output and reset the stall watchdog. Any
 	--- output at all counts as progress, which is what lets a slow download
@@ -172,6 +250,8 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 	---@param line string
 	local function observe(line)
 		last_progress = vim.uv.now()
+		output_buf[#output_buf + 1] = line
+		if #output_buf > 20 then table.remove(output_buf, 1) end
 		local pct = line:match("(%d?%d?%d)%%")
 		if phase ~= "loading" and pct then
 			phase = "downloading"
@@ -259,14 +339,15 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 			if M._llama_job_id == nil then
 				return finish(false, "llama-server exited before becoming ready")
 			end
-			if vim.uv.now() - last_progress > stall_ms then
-				return finish(
-					false,
-					("llama-server made no progress for %ds — check memory pressure"):format(
-						math.floor(stall_ms / 1000)
-					)
+		if vim.uv.now() - last_progress > stall_ms then
+			local diag = #output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or "\nNo output captured."
+			return finish(
+				false,
+				("llama-server (job %d) made no progress for %ds — check memory pressure.%s"):format(
+					M._llama_job_id or -1, math.floor(stall_ms / 1000), diag
 				)
-			end
+			)
+		end
 			-- One probe at a time; a slow probe must not queue up behind itself.
 			if in_flight then
 				return
@@ -583,9 +664,12 @@ M._spawn_whisper_server = function(bin, model, port, on_phase, stall_ms, on_read
 
 	local phase = "starting"
 	local last_progress = vim.uv.now()
+	local output_buf = {}
 
 	local function observe(line)
 		last_progress = vim.uv.now()
+		output_buf[#output_buf + 1] = line
+		if #output_buf > 20 then table.remove(output_buf, 1) end
 		if line:match("loading model") or line:match("ggml") or line:match("whisper") then
 			if phase ~= "loading" then
 				phase = "loading"
@@ -663,7 +747,8 @@ M._spawn_whisper_server = function(bin, model, port, on_phase, stall_ms, on_read
 			return finish(false, "whisper-server exited before becoming ready")
 		end
 		if vim.uv.now() - last_progress > stall_ms then
-			return finish(false, ("whisper-server made no progress for %ds"):format(math.floor(stall_ms / 1000)))
+			local diag = #output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or "\nNo output captured."
+			return finish(false, ("whisper-server (job %d) made no progress for %ds.%s"):format(M._whisper_job_id or -1, math.floor(stall_ms / 1000), diag))
 		end
 		if in_flight then
 			return

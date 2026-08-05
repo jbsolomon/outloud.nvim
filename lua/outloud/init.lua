@@ -297,7 +297,24 @@ function M.start()
 		ui_state("ready")
 	end
 
-	-- If using the built-in server (no custom server_url), auto-start
+	-- Check if daemon needs rebuilding before starting
+	if install.needs_rebuild() then
+		ui_state("starting_server", "building daemon...")
+		vim.notify("[outloud] daemon out of date, rebuilding...")
+		install.build_daemon(function(ok)
+			if not ok then
+				ui_state("inactive", "daemon build failed")
+				return
+			end
+			_start_with_server(backend, ui_state, signal, on_server_phase, on_server_ready)
+		end)
+	else
+		M._start_with_server(backend, ui_state, signal, on_server_phase, on_server_ready)
+	end
+end
+
+--- Internal: start the STT server and pipeline.
+local function _start_with_server(backend, ui_state, signal, on_server_phase, on_server_ready)
 	if not M.config.model.server_url then
 		signal("stt", "starting")
 		ui_state("starting_server")
