@@ -573,7 +573,7 @@ Plugin ↔ Rust daemon over stdin/stdout JSON lines.
 
 ```lua
 {
-  "urmzd/outloud.nvim",
+  "jbsolomon/outloud.nvim",
   build = ":OutloudInstall",
   opts = {
     agent = { adapter = "claudecode" },

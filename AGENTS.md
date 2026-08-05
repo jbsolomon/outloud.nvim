@@ -18,7 +18,7 @@ No cloud STT. No TTS. Local-only. You speak, text appears.
 
 **Current version:** 0.6.0 (July 2026)
 **License:** Apache 2.0
-**Repository:** github.com/urmzd/outloud.nvim
+**Repository:** github.com/jbsolomon/outloud.nvim
 
 ---
 

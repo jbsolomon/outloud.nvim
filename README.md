@@ -9,14 +9,14 @@
     &middot;
     <a href="#configuration">Configuration</a>
     &middot;
-    <a href="https://github.com/urmzd/outloud.nvim/issues">Report Bug</a>
+    <a href="https://github.com/jbsolomon/outloud.nvim/issues">Report Bug</a>
   </p>
 </p>
 
 <p align="center">
-  <a href="https://github.com/urmzd/outloud.nvim/actions/workflows/ci.yml"><img src="https://github.com/urmzd/outloud.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/jbsolomon/outloud.nvim/actions/workflows/ci.yml"><img src="https://github.com/jbsolomon/outloud.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   &nbsp;
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/urmzd/outloud.nvim" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/jbsolomon/outloud.nvim" alt="License"></a>
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ Optional: [just](https://github.com/casey/just) for convenient dev commands.
 
 ```lua
 {
-  "urmzd/outloud.nvim",
+  "jbsolomon/outloud.nvim",
   build = ":OutloudInstall",
   opts = {},
 }
@@ -75,7 +75,7 @@ The server must expose a whisper-server-compatible `/inference` endpoint.
 
 ```sh
 # 1. Clone the plugin
-git clone https://github.com/urmzd/outloud.nvim ~/.local/share/nvim/lazy/outloud.nvim
+git clone https://github.com/jbsolomon/outloud.nvim ~/.local/share/nvim/lazy/outloud.nvim
 
 # 2. Build and install the daemon binary
 cd ~/.local/share/nvim/lazy/outloud.nvim

@@ -2,7 +2,7 @@
 
 CLI daemon for outloud.nvim — voice-driven coding.
 
-Part of the [outloud.nvim](https://github.com/urmzd/outloud.nvim) workspace.
+Part of the [outloud.nvim](https://github.com/jbsolomon/outloud.nvim) workspace.
 
 ## License
 
