@@ -85,8 +85,6 @@ function Scratchpad:show(text, iterating)
 		wo = {
 			wrap = true,
 			linebreak = true,
-			modifiable = false,
-			readonly = true,
 		},
 		keys = {
 			q = "close",
@@ -94,10 +92,12 @@ function Scratchpad:show(text, iterating)
 		},
 	})
 
-	-- Set initial content
+	-- Set initial content and buffer options
 	local buf = self.win.buf
 	if buf and vim.api.nvim_buf_is_valid(buf) then
 		vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n"))
+		vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
+		vim.api.nvim_set_option_value("readonly", true, { buf = buf })
 	end
 
 	self:_set_spinner(iterating)

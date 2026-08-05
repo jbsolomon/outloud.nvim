@@ -70,6 +70,7 @@ Return only the updated scratch pad content. Do not include explanations or mark
 		cancel = "<leader>lc",
 		sidebar = "<leader>ll",
 		scratchpad = "<leader>lp",
+		toggle_recording = "<leader>lt",
 	},
 }
 
@@ -140,39 +141,10 @@ function M.setup(opts)
 		end
 		sidebar:set_state("ready")
 
-		local buf = vim.api.nvim_get_current_buf()
-
-		local function cleanup()
-			M._listening = false
-			pcall(vim.keymap.del, "n", "<Space>", { buffer = buf })
-			pcall(vim.keymap.del, "n", "<Esc>", { buffer = buf })
-		end
-
-		-- <Space> toggles recording on/off
-		vim.keymap.set("n", "<Space>", function()
-			if not M._voice or not M._voice:is_running() then
-				vim.notify("[outloud] waiting for daemon to start...", vim.log.levels.INFO)
-				return
-			end
-			if M._listening then
-				M._voice:stop_listening()
-				M._listening = false
-			else
-				M._voice:start_listening()
-				M._listening = true
-			end
-		end, { buffer = buf, desc = "outloud: toggle recording" })
-
-		-- <Esc> cancels and dismisses the UI
-		vim.keymap.set("n", "<Esc>", function()
-			if M._listening and M._voice then
-				M._voice:cancel()
-			end
-			cleanup()
-			M.dismiss()
-		end, { buffer = buf, desc = "outloud: close" })
-
-		M._session_cleanup = cleanup
+	local function cleanup()
+		M._listening = false
+	end
+	-- No sidebar-local keymaps; recording toggled via global keys only
 	end, { desc = "outloud: open" })
 
 	vim.keymap.set("n", keys.cancel, function()
@@ -193,6 +165,20 @@ function M.setup(opts)
 		end
 		M._accumulator:toggle_scratchpad()
 	end, { desc = "outloud: toggle scratchpad preview" })
+
+	vim.keymap.set("n", keys.toggle_recording, function()
+		if not M._voice or not M._voice:is_running() then
+			vim.notify("[outloud] waiting for daemon to start...", vim.log.levels.INFO)
+			return
+		end
+		if M._listening then
+			M._voice:stop_listening()
+			M._listening = false
+		else
+			M._voice:start_listening()
+			M._listening = true
+		end
+	end, { desc = "outloud: toggle recording" })
 end
 
 --- Build the environment variable table for the daemon process.

@@ -83,8 +83,8 @@ local STATE_LABEL = {
 	downloading_model = "downloading...",
 	loading_model = "loading model...",
 	starting_daemon = "starting daemon...",
-	ready = "press <Space> to record",
-	listening = "recording... <Space> to send",
+	ready = "press to record",
+	listening = "recording... press to send",
 	transcribing = "transcribing...",
 	idle = "idle",
 	inactive = "stopped",
@@ -221,14 +221,6 @@ function Sidebar:_ensure_buf()
 	vim.api.nvim_set_option_value("filetype", "outloud", { buf = self.buf })
 	vim.api.nvim_set_option_value("modifiable", false, { buf = self.buf })
 
-	-- Local affordances, advertised in the hint row and the help block.
-	vim.keymap.set("n", "?", function()
-		self:toggle_help()
-	end, { buffer = self.buf, desc = "outloud: toggle help" })
-	vim.keymap.set("n", "q", function()
-		self:close()
-	end, { buffer = self.buf, desc = "outloud: close sidebar" })
-
 	local blank = {}
 	for _ = 1, HEADER_H do
 		blank[#blank + 1] = ""
@@ -240,18 +232,20 @@ end
 
 ---@return number
 function Sidebar:_width()
-	if self.win and vim.api.nvim_win_is_valid(self.win) then
-		return vim.api.nvim_win_get_width(self.win)
+	local real_win = (self.win and self.win.win) or self.win
+	if real_win and vim.api.nvim_win_is_valid(real_win) then
+		return vim.api.nvim_win_get_width(real_win)
 	end
 	return self.opts.width
 end
 
 ---@return boolean
 function Sidebar:_at_bottom()
-	if not (self.win and vim.api.nvim_win_is_valid(self.win)) then
+	local real_win = (self.win and self.win.win) or self.win
+	if not (real_win and vim.api.nvim_win_is_valid(real_win)) then
 		return true
 	end
-	local cur = vim.api.nvim_win_get_cursor(self.win)[1]
+	local cur = vim.api.nvim_win_get_cursor(real_win)[1]
 	local total = vim.api.nvim_buf_line_count(self.buf)
 	return cur >= total - 1
 end
@@ -267,9 +261,12 @@ function Sidebar:_write(start_row, end_row, lines)
 	vim.api.nvim_set_option_value("modifiable", true, { buf = self.buf })
 	vim.api.nvim_buf_set_lines(self.buf, start_row, end_row, false, lines)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = self.buf })
-	if follow and self.win and vim.api.nvim_win_is_valid(self.win) then
-		local n = vim.api.nvim_buf_line_count(self.buf)
-		pcall(vim.api.nvim_win_set_cursor, self.win, { n, 0 })
+	if follow then
+		local real_win = (self.win and self.win.win) or self.win
+		if real_win and vim.api.nvim_win_is_valid(real_win) then
+			local n = vim.api.nvim_buf_line_count(self.buf)
+			pcall(vim.api.nvim_win_set_cursor, real_win, { n, 0 })
+		end
 	end
 end
 
@@ -286,16 +283,16 @@ function Sidebar:_hint_line()
 	local parts
 
 	if s == "listening" then
-		parts = { "<Space> send", "<Esc> cancel" }
+		parts = { (k.toggle_recording or "<leader>lt") .. " send", (k.cancel or "<leader>lc") .. " cancel" }
 	elseif s == "ready" then
-		parts = { "<Space> record", "<Esc> close" }
+		parts = { (k.toggle_recording or "<leader>lt") .. " record", (k.cancel or "<leader>lc") .. " cancel" }
 	elseif BUSY[s] then
 		parts = { "working" }
 	else
 		parts = { (k.push_to_talk or "<leader>ls") .. " talk" }
 	end
 
-	parts[#parts + 1] = "? help"
+	parts[#parts + 1] = (k.sidebar or "<leader>ll") .. " close"
 	return table.concat(parts, "   ")
 end
 
@@ -435,8 +432,7 @@ function Sidebar:_help_lines(w)
 	local k = self.keys or {}
 	local rows = {
 		{ k.push_to_talk or "<leader>ls", "talk (starts the daemon)" },
-		{ "<Space>", "record, then send" },
-		{ "<Esc>", "cancel and dismiss" },
+		{ k.toggle_recording or "<leader>lt", "toggle recording" },
 		{ k.cancel or "<leader>lc", "cancel recording" },
 		{ k.sidebar or "<leader>ll", "toggle this sidebar" },
 	}
@@ -693,41 +689,53 @@ end
 
 ---@return boolean
 function Sidebar:is_open()
-	return self.win ~= nil and vim.api.nvim_win_is_valid(self.win)
+	return self.win ~= nil and not self.win.closed
 end
 
---- Open the sidebar as a full-height vertical split.
+--- Open the sidebar as a full-height edge-anchored floating window.
 ---@param focus? boolean steal the cursor (manual open) or not (auto-open)
 function Sidebar:open(focus)
 	self:_ensure_buf()
 	if self:is_open() then
-		if focus then
-			vim.api.nvim_set_current_win(self.win)
-		end
 		return
 	end
-	local prev = vim.api.nvim_get_current_win()
-	local side = self.opts.position == "left" and "topleft" or "botright"
-	vim.cmd(side .. " vsplit")
-	self.win = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_buf(self.win, self.buf)
-	-- Set the width explicitly rather than via a count on :vsplit. The count is
-	-- not reliably honored once other windows are open, and `equalalways`
-	-- re-balances afterwards; winfixwidth then pins it against later splits.
-	vim.api.nvim_set_option_value("winfixwidth", true, { win = self.win })
-	vim.api.nvim_win_set_width(self.win, self.opts.width)
-	-- Content is hard-wrapped to the window width, so soft wrapping would break
-	-- the box borders and gutters.
-	vim.api.nvim_set_option_value("wrap", false, { win = self.win })
-	vim.api.nvim_set_option_value("number", false, { win = self.win })
-	vim.api.nvim_set_option_value("relativenumber", false, { win = self.win })
-	vim.api.nvim_set_option_value("signcolumn", "no", { win = self.win })
-	vim.api.nvim_set_option_value("cursorline", false, { win = self.win })
 
-	-- Re-flow from the entry model when the window width changes.
+	local ok, Snacks = pcall(require, "snacks")
+	if not ok then
+		vim.notify("[outloud] snacks.nvim not available, sidebar disabled", vim.log.levels.ERROR)
+		return
+	end
+
+	self.win = Snacks.win({
+		position = self.opts.position == "left" and "top-left" or "top-right",
+		width = self.opts.width,
+		height = "100%",
+		border = "none",
+		zindex = 40,
+		enter = false,
+		resize = true,
+		wo = {
+			wrap = false,
+			number = false,
+			relativenumber = false,
+			signcolumn = "no",
+			cursorline = false,
+		},
+		keys = {
+			q = "close",
+			["<C-c>"] = "close",
+		},
+	})
+
+	-- Set buffer content
+	self:_render_header()
+	self:_render_all()
+
+	-- Re-flow content when the window is resized.
 	self._augroup = vim.api.nvim_create_augroup("outloud_sidebar", { clear = true })
-	vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+	vim.api.nvim_create_autocmd("WinResized", {
 		group = self._augroup,
+		buffer = self.buf,
 		desc = "outloud: re-flow sidebar on resize",
 		callback = function()
 			if self:is_open() then
@@ -736,14 +744,6 @@ function Sidebar:open(focus)
 			end
 		end,
 	})
-
-	self:_render_header()
-	self:_render_all()
-	local n = vim.api.nvim_buf_line_count(self.buf)
-	pcall(vim.api.nvim_win_set_cursor, self.win, { n, 0 })
-	if not focus and vim.api.nvim_win_is_valid(prev) then
-		vim.api.nvim_set_current_win(prev)
-	end
 end
 
 function Sidebar:close()
@@ -751,10 +751,10 @@ function Sidebar:close()
 		pcall(vim.api.nvim_del_augroup_by_id, self._augroup)
 		self._augroup = nil
 	end
-	if self:is_open() then
-		vim.api.nvim_win_close(self.win, true)
+	if self.win then
+		self.win:close()
+		self.win = nil
 	end
-	self.win = nil
 end
 
 function Sidebar:toggle()
