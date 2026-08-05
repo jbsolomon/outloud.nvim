@@ -870,7 +870,7 @@ local sp_handler = Accumulator:new({
 	},
 })
 
--- First iteration (empty scratchpad)
+-- First iteration (empty scratchpad, no partials)
 local result1 = nil
 sp_handler:iterate("write a function", function(text)
 	result1 = text
@@ -878,6 +878,7 @@ end)
 assert_eq(result1, "LLM transformed: write a function", "first iteration transforms utterance")
 assert_eq(sp_handler.text, "LLM transformed: write a function", "scratchpad text updated")
 assert_eq(sp_handler._iterating, false, "gate is clear after first iteration")
+assert_eq(sp_handler._partial_text, "", "partials cleared after iteration")
 
 -- Second iteration (scratchpad has content)
 local result2 = nil
@@ -1081,6 +1082,391 @@ fallback_acc:dispose()
 
 -- Restore for any remaining tests
 package.loaded["CodeCompanion"] = original_cc
+
+-- ============================================================================
+-- Test 18: Scratchpad Preview (snacks.win)
+-- ============================================================================
+section("18. Scratchpad Preview")
+
+local Scratchpad = require("outloud.scratchpad").Scratchpad
+
+-- Test construction
+local sp = Scratchpad:new()
+assert_type(sp, "table", "Scratchpad instance is a table")
+assert_eq(sp.opts.width, 60, "default width is 60")
+assert_eq(sp.opts.height, 20, "default height is 20")
+assert_eq(sp.opts.position, "float", "default position is float")
+assert_eq(sp.opts.border, "rounded", "default border is rounded")
+assert_eq(sp.win, nil, "initial win is nil")
+assert_eq(sp:is_open(), false, "not open initially")
+
+-- Test construction with custom opts
+local sp_custom = Scratchpad:new({ width = 80, height = 30, position = "bottom" })
+assert_eq(sp_custom.opts.width, 80, "custom width set")
+assert_eq(sp_custom.opts.height, 30, "custom height set")
+assert_eq(sp_custom.opts.position, "bottom", "custom position set")
+
+-- Test show with snacks unavailable (snacks not in package.loaded)
+local original_snacks = package.loaded["snacks"]
+package.loaded["snacks"] = nil
+sp:show("test content", false)
+assert_eq(sp.win, nil, "show does nothing without snacks")
+
+-- Mock snacks.win for testing
+package.loaded["snacks"] = {
+	win = function(opts)
+		local mock_buf = vim.api.nvim_create_buf(false, true)
+		return {
+			closed = false,
+			buf = mock_buf,
+			win = nil,  -- no actual float window
+			close = function() end,
+		}
+	end,
+}
+
+-- Test show creates window
+sp:show("hello world", false)
+assert_ok(sp.win ~= nil, "show creates window")
+assert_eq(sp:is_open(), true, "is_open returns true after show")
+
+-- Test show with iterating flag
+sp:show("hello world", true)
+assert_eq(sp:is_open(), true, "still open after show with iterating")
+
+-- Test close
+sp:close()
+assert_eq(sp.win, nil, "win is nil after close")
+assert_eq(sp:is_open(), false, "not open after close")
+
+-- Test toggle opens
+sp:toggle("content", false)
+assert_eq(sp:is_open(), true, "toggle opens when closed")
+
+-- Test toggle closes
+sp:toggle("content", false)
+assert_eq(sp:is_open(), false, "toggle closes when open")
+
+-- Test dispose
+sp_custom:show("content", false)
+sp_custom:dispose()
+assert_eq(sp_custom:is_open(), false, "dispose closes window")
+
+-- Restore snacks
+package.loaded["snacks"] = original_snacks
+
+-- Clean up
+sp:dispose()
+sp_custom:dispose()
+
+-- ============================================================================
+-- Test 18b: Scratchpad Spinner & In-Place Updates
+-- ============================================================================
+section("18b. Scratchpad Spinner & In-Place Updates")
+
+-- Re-mock snacks with a more complete mock that simulates a real window
+local mock_float_buf = nil
+local mock_float_win = 99  -- pretend window id
+local mock_win_valid = true
+local mock_win_closed = false
+local mock_win_configs = {}  -- track win_set_config calls
+local mock_set_lines_calls = {}  -- track buf_set_lines calls
+
+package.loaded["snacks"] = {
+	win = function(opts)
+		mock_float_buf = vim.api.nvim_create_buf(false, true)
+		mock_win_valid = true
+		mock_win_closed = false
+		mock_win_configs = {}
+		return {
+			closed = false,
+			buf = mock_float_buf,
+			win = mock_float_win,
+			close = function()
+				mock_win_closed = true
+			end,
+		}
+	end,
+}
+
+-- Override nvim_win_is_valid to be controllable
+local orig_win_is_valid = vim.api.nvim_win_is_valid
+vim.api.nvim_win_is_valid = function(w)
+	if w == mock_float_win then
+		return mock_win_valid
+	end
+	return orig_win_is_valid(w)
+end
+
+-- Override nvim_win_set_config so it doesn't error on our mock window
+local orig_win_set_config = vim.api.nvim_win_set_config
+vim.api.nvim_win_set_config = function(win_id, config)
+	if win_id == mock_float_win then
+		table.insert(mock_win_configs, config)
+		return  -- no-op for mock
+	end
+	return orig_win_set_config(win_id, config)
+end
+
+-- Re-define spinner frames locally (mirrors scratchpad.lua)
+local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+
+-- Test show creates initial content
+local sp_spinner = Scratchpad:new()
+sp_spinner:show("initial content", false)
+assert_ok(sp_spinner.win ~= nil, "show creates window")
+assert_eq(sp_spinner:is_open(), true, "is_open after show")
+
+-- Verify buffer content was set
+local sp_buf = sp_spinner.win.buf
+local sp_lines = vim.api.nvim_buf_get_lines(sp_buf, 0, -1, false)
+assert_eq(table.concat(sp_lines, "\n"), "initial content", "initial content in buffer")
+
+-- Test in-place update: calling show() again should update content without recreating
+local old_win_ref = sp_spinner.win
+local old_buf_ref = sp_spinner.win.buf
+sp_spinner:show("updated content line one\nupdated content line two", true)
+assert_eq(sp_spinner.win, old_win_ref, "window reference unchanged after in-place update")
+assert_eq(sp_spinner.win.buf, old_buf_ref, "buffer reference unchanged after in-place update")
+
+-- Verify content was updated
+sp_lines = vim.api.nvim_buf_get_lines(sp_buf, 0, -1, false)
+assert_eq(#sp_lines, 2, "two lines after in-place update")
+assert_eq(sp_lines[1], "updated content line one", "first line updated")
+assert_eq(sp_lines[2], "updated content line two", "second line updated")
+
+-- Test iterating=true starts a timer (spinner)
+assert_ok(sp_spinner._timer ~= nil, "timer created when iterating=true")
+
+-- Test that _set_spinner stops the old timer
+local timer_before = sp_spinner._timer
+sp_spinner:show("same content", true)  -- iterating again
+assert_ok(sp_spinner._timer ~= timer_before, "old timer replaced with new one")
+
+-- Test iterating=false stops the timer
+sp_spinner:show("idle content", false)
+assert_eq(sp_spinner._timer, nil, "timer is nil when iterating=false")
+
+-- Test tick increments (manually)
+sp_spinner._tick = 5
+local frame_at_5 = SPINNER[5 % 10 + 1]  -- index 6
+assert_eq(frame_at_5, "⠴", "spinner frame at tick 5 is correct")
+
+-- Test close stops spinner and clears win
+sp_spinner:show("content", true)  -- ensure timer is running
+assert_ok(sp_spinner._timer ~= nil, "timer running before close")
+sp_spinner:close()
+assert_eq(sp_spinner._timer, nil, "timer cleared after close")
+assert_eq(sp_spinner.win, nil, "win cleared after close")
+assert_eq(sp_spinner:is_open(), false, "not open after close")
+
+-- Restore
+vim.api.nvim_win_is_valid = orig_win_is_valid
+package.loaded["snacks"] = nil
+sp_spinner:dispose()
+
+-- ============================================================================
+-- Test 18c: Scratchpad Edge Cases
+-- ============================================================================
+section("18c. Scratchpad Edge Cases")
+
+-- Mock snacks for edge case tests
+package.loaded["snacks"] = {
+	win = function(opts)
+		local b = vim.api.nvim_create_buf(false, true)
+		return { closed = false, buf = b, win = 99, close = function() end }
+	end,
+}
+
+local sp_edge = Scratchpad:new()
+
+-- Double close: close when already closed
+sp_edge:close()
+assert_eq(sp_edge.win, nil, "close on nil win is safe")
+sp_edge:close()
+assert_eq(sp_edge.win, nil, "double close is safe")
+
+-- Double dispose
+sp_edge:dispose()
+assert_eq(sp_edge:is_open(), false, "dispose is safe")
+sp_edge:dispose()
+assert_eq(sp_edge:is_open(), false, "double dispose is safe")
+
+-- Show after close
+sp_edge:show("after close", false)
+assert_eq(sp_edge:is_open(), true, "can show after close")
+sp_edge:close()
+
+-- Toggle when closed: opens
+sp_edge:toggle("toggle open", false)
+assert_eq(sp_edge:is_open(), true, "toggle opens when closed")
+
+-- Toggle when open: closes
+sp_edge:toggle("toggle close", false)
+assert_eq(sp_edge:is_open(), false, "toggle closes when open")
+
+-- Show with empty string
+sp_edge:show("", false)
+local empty_buf = sp_edge.win.buf
+local empty_lines = vim.api.nvim_buf_get_lines(empty_buf, 0, -1, false)
+assert_eq(#empty_lines, 1, "empty string produces one line")
+assert_eq(empty_lines[1], "", "that line is empty")
+sp_edge:close()
+
+-- Show with multi-line content
+sp_edge:show("line1\nline2\nline3\nline4", false)
+local multi_buf = sp_edge.win.buf
+local multi_lines = vim.api.nvim_buf_get_lines(multi_buf, 0, -1, false)
+assert_eq(#multi_lines, 4, "multi-line content produces four lines")
+assert_eq(multi_lines[4], "line4", "last line correct")
+sp_edge:close()
+
+-- Custom border option
+local sp_border = Scratchpad:new({ border = "single" })
+assert_eq(sp_border.opts.border, "single", "custom border set")
+sp_border:dispose()
+
+package.loaded["snacks"] = nil
+sp_edge:dispose()
+
+-- ============================================================================
+-- Test 18d: Accumulator ↔ Scratchpad Integration
+-- ============================================================================
+section("18d. Accumulator ↔ Scratchpad Integration")
+
+-- Mock snacks for accumulator integration tests
+package.loaded["snacks"] = {
+	win = function(opts)
+		local b = vim.api.nvim_create_buf(false, true)
+		return { closed = false, buf = b, win = 99, close = function() end }
+	end,
+}
+
+-- Test toggle_scratchpad creates scratchpad lazily
+local acc_sp = Accumulator:new({ mode = "scratchpad" })
+assert_eq(acc_sp._scratchpad, nil, "scratchpad not created until toggle_scratchpad")
+acc_sp:append("some content")
+assert_eq(acc_sp._scratchpad, nil, "scratchpad still not created after append")
+-- In scratchpad mode, append() writes to _partial_text, not self.text
+assert_eq(acc_sp._partial_text, "some content", "partial accumulated separately")
+assert_eq(acc_sp.text, "", "refined text is empty until iteration")
+
+-- First toggle creates scratchpad and opens it
+acc_sp:toggle_scratchpad()
+assert_ok(acc_sp._scratchpad ~= nil, "scratchpad created after toggle_scratchpad")
+assert_eq(acc_sp._scratchpad:is_open(), true, "scratchpad is open after first toggle")
+
+-- Second toggle closes it
+acc_sp:toggle_scratchpad()
+assert_eq(acc_sp._scratchpad:is_open(), false, "scratchpad closed after second toggle")
+
+-- Third toggle opens it again (reuse existing scratchpad)
+local sp_before = acc_sp._scratchpad
+acc_sp:toggle_scratchpad()
+assert_eq(acc_sp._scratchpad, sp_before, "same scratchpad instance reused")
+assert_eq(acc_sp._scratchpad:is_open(), true, "scratchpad open after third toggle")
+
+-- Verify the scratchpad buffer shows refined text (empty, since no iteration yet)
+local acc_sp_buf = acc_sp._scratchpad.win.buf
+local acc_sp_lines = vim.api.nvim_buf_get_lines(acc_sp_buf, 0, -1, false)
+assert_eq(table.concat(acc_sp_lines, "\n"), "", "scratchpad shows empty refined text before iteration")
+
+-- Simulate iteration: set self.text to simulate LLM response
+acc_sp.text = "refined content"
+acc_sp._partial_text = ""
+acc_sp:_refresh_buf()
+acc_sp_lines = vim.api.nvim_buf_get_lines(acc_sp_buf, 0, -1, false)
+assert_eq(table.concat(acc_sp_lines, "\n"), "refined content", "scratchpad shows refined content after iteration")
+
+-- Test that new partials don't overwrite refined text
+acc_sp:append("new partial")
+acc_sp_lines = vim.api.nvim_buf_get_lines(acc_sp_buf, 0, -1, false)
+assert_eq(table.concat(acc_sp_lines, "\n"), "refined content", "scratchpad still shows refined text after partial append")
+assert_eq(acc_sp._partial_text, "new partial", "partial accumulated separately")
+
+-- Test dispose cleans up scratchpad
+acc_sp:dispose()
+assert_eq(acc_sp._scratchpad, nil, "scratchpad cleared after dispose")
+
+-- Test toggle_scratchpad with custom size options
+local acc_sp2 = Accumulator:new({
+	mode = "scratchpad",
+	scratchpad_width = 80,
+	scratchpad_height = 25,
+})
+acc_sp2:toggle_scratchpad()
+assert_eq(acc_sp2._scratchpad.opts.width, 80, "scratchpad width from accumulator opts")
+assert_eq(acc_sp2._scratchpad.opts.height, 25, "scratchpad height from accumulator opts")
+acc_sp2:dispose()
+
+-- Test with snacks unavailable
+package.loaded["snacks"] = nil
+local acc_sp3 = Accumulator:new({ mode = "scratchpad" })
+acc_sp3:append("no snacks")
+acc_sp3:toggle_scratchpad()
+-- toggle_scratchpad calls scratchpad:toggle which calls :show which warns but doesn't error
+assert_eq(acc_sp3._scratchpad.win, nil, "scratchpad win is nil without snacks")
+acc_sp3:dispose()
+
+-- Restore snacks for remaining tests
+package.loaded["snacks"] = {
+	win = function(opts)
+		local b = vim.api.nvim_create_buf(false, true)
+		return { closed = false, buf = b, win = 99, close = function() end }
+	end,
+}
+
+-- ============================================================================
+-- Test 18e: Scratchpad Keybinding & Command Wiring
+-- ============================================================================
+section("18e. Scratchpad Keybinding & Command Wiring")
+
+-- Verify the keybinding default exists
+assert_eq(ls.defaults.keys.scratchpad, "<leader>lp", "default scratchpad keybinding")
+
+-- Verify the public API function exists
+assert_type(ls.toggle_scratchpad, "function", "toggle_scratchpad is a public function")
+
+-- Test toggle_scratchpad warns when no accumulator
+local warn_notified = false
+local orig_notify = vim.notify
+vim.notify = function(msg, level)
+	if msg:find("accumulator not active") then
+		warn_notified = true
+	end
+end
+ls.toggle_scratchpad()
+assert_eq(warn_notified, true, "toggle_scratchpad warns when no accumulator")
+vim.notify = orig_notify
+
+-- Test toggle_scratchpad delegates to accumulator
+local test_acc = Accumulator:new({ mode = "scratchpad" })
+test_acc:append("delegation test")
+ls._accumulator = test_acc
+
+-- Mock the scratchpad toggle to verify it's called
+local toggle_called = false
+local orig_toggle = test_acc._scratchpad and test_acc._scratchpad.toggle or nil
+-- Create a scratchpad and override toggle
+test_acc._scratchpad = Scratchpad:new()
+test_acc._scratchpad.toggle = function(self, text, iterating)
+	toggle_called = true
+end
+ls.toggle_scratchpad()
+assert_eq(toggle_called, true, "toggle_scratchpad delegates to accumulator")
+
+-- Clean up
+ls._accumulator = nil
+test_acc:dispose()
+
+-- Verify the :OutloudScratchpad command exists in the plugin file
+local plugin_file = root .. "/plugin/outloud.vim"
+local f = io.open(plugin_file, "r")
+assert_ok(f ~= nil, "plugin/outloud.vim exists")
+local plugin_content = f:read("*a")
+io.close(f)
+assert_ok(plugin_content:find("OutloudScratchpad"), ":OutloudScratchpad command defined in plugin file")
+assert_ok(plugin_content:find("toggle_scratchpad"), ":OutloudScratchpad calls toggle_scratchpad")
 
 -- ============================================================================
 -- Summary

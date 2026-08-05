@@ -65,6 +65,8 @@ Commands `:OutloudUndo`, `:OutloudSnapshots`, and `:OutloudSnapshotsPrune` exist
 | `voice.lua` | Spawns/manages the Rust daemon process via `vim.fn.jobstart`. JSON lines protocol over stdin/stdout. |
 | `sidebar.lua` | Session sidebar: fixed 4-row status header + conversation entries (turns, partials, errors). Hard-wrapped, re-flowing on resize. |
 | `ui.lua` | Statusline component only. Returns compact state strings (`ls:mic`, `ls:...`). |
+| `scratchpad.lua` | Floating preview window for scratchpad mode. Uses `snacks.win`. Shows live accumulator content with spinner in title while LLM is refining. |
+| `accumulator.lua` | Collects transcript chunks, manages scratchpad mode (iterative LLM refinement via CodeCompanion). |
 | **install.lua** | `:OutloudInstall` (cargo build), `whisper-server` and `llama-server` lifecycle (spawn, probe, stall detection, stop, auto-download). |
 | **health.lua** | `:checkhealth outloud` — checks daemon binary, STT server (backend-aware), plugin config. |
 

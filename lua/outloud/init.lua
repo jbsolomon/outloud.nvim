@@ -69,6 +69,7 @@ Return only the updated scratch pad content. Do not include explanations or mark
 		push_to_talk = "<leader>ls",
 		cancel = "<leader>lc",
 		sidebar = "<leader>ll",
+		scratchpad = "<leader>lp",
 	},
 }
 
@@ -184,6 +185,14 @@ function M.setup(opts)
 	vim.keymap.set("n", keys.sidebar, function()
 		M._ensure_sidebar():toggle()
 	end, { desc = "outloud: toggle session sidebar" })
+
+	vim.keymap.set("n", keys.scratchpad, function()
+		if not M._accumulator then
+			vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
+			return
+		end
+		M._accumulator:toggle_scratchpad()
+	end, { desc = "outloud: toggle scratchpad preview" })
 end
 
 --- Build the environment variable table for the daemon process.
@@ -468,6 +477,15 @@ function M.clear_accumulator()
 		return
 	end
 	M._accumulator:clear()
+end
+
+--- Toggle the scratchpad floating preview window.
+function M.toggle_scratchpad()
+	if not M._accumulator then
+		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
+		return
+	end
+	M._accumulator:toggle_scratchpad()
 end
 
 return M

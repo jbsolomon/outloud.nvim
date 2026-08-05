@@ -1,3 +1,5 @@
+local Scratchpad = require("outloud.scratchpad").Scratchpad
+
 local M = {}
 
 --- Accumulator mode: collects transcript chunks in a temp buffer instead of
@@ -20,8 +22,9 @@ local M = {}
 ---@field chunks string[]       raw transcript chunks in order
 ---@field text string           joined accumulated text
 ---@field mode string           "hidden" | "preview" | "scratchpad"
+---@field _partial_text string   raw partial text accumulated since last iteration (scratchpad mode only)
 ---@field _iterating boolean    gate to prevent concurrent LLM calls
----@field _augroup number?      autocmd group for cleanup
+---@field _scratchpad Scratchpad?  floating preview window
 local Accumulator = {}
 Accumulator.__index = Accumulator
 
@@ -63,21 +66,31 @@ function Accumulator:new(opts)
 		win = nil,
 		chunks = {},
 		text = "",
+		_partial_text = "",
 		mode = opts.mode,
 		opts = opts,
 		_iterating = false,
 		_augroup = nil,
+		_scratchpad = nil,
 	}, Accumulator)
 end
 
 --- Append a transcript chunk to the accumulation.
+--- In scratchpad mode, partials go to `_partial_text` (hidden from scratchpad preview,
+--- sent as context to the LLM on next iteration). In other modes, appends to `self.text`.
 ---@param text string
 function Accumulator:append(text)
 	if not text or text == "" then
 		return
 	end
-	self.chunks[#self.chunks + 1] = text
-	self.text = table.concat(self.chunks, " ")
+	if self.mode == "scratchpad" then
+		-- Scratchpad mode: accumulate partials separately from refined text
+		self._partial_text = self._partial_text ~= "" and (self._partial_text .. " " .. text) or text
+	else
+		-- Classic mode: append directly to text
+		self.chunks[#self.chunks + 1] = text
+		self.text = table.concat(self.chunks, " ")
+	end
 	self:_refresh_buf()
 end
 
@@ -85,6 +98,7 @@ end
 function Accumulator:clear()
 	self.chunks = {}
 	self.text = ""
+	self._partial_text = ""
 	self:_refresh_buf()
 end
 
@@ -173,12 +187,15 @@ function Accumulator:_build_prompt(context)
 	return table.concat(parts, "\n")
 end
 
---- Build a scratchpad prompt: current scratchpad content + latest utterance.
+--- Build a scratchpad prompt: current scratchpad content + accumulated partials + latest utterance.
+--- The LLM sees the refined scratchpad, any raw partial text, and the new instruction.
 --- Used in scratchpad mode for iterative LLM refinement.
----@param utterance string  the latest transcript chunk
+---@param utterance string  the latest transcript chunk (final transcript)
 ---@return string
 function Accumulator:_build_scratchpad_prompt(utterance)
-	return string.format(self.opts.scratchpad_system, self.text or "(empty)", utterance)
+	-- Combine partials with the final utterance for the instruction
+	local instruction = self._partial_text ~= "" and (self._partial_text .. " " .. utterance) or utterance
+	return string.format(self.opts.scratchpad_system, self.text or "(empty)", instruction)
 end
 
 --- Iterate the scratchpad: send (current content + latest utterance) to the LLM,
@@ -249,8 +266,15 @@ function Accumulator:iterate(utterance, on_complete)
 		end
 	end
 
-	-- No handler — fall back to direct append (dumb accumulation)
-	self:append(utterance)
+	-- No handler — fall back to merging partials + utterance into scratchpad text
+	if self.mode == "scratchpad" then
+		local combined = self._partial_text ~= "" and (self._partial_text .. " " .. utterance) or utterance
+		self.text = self.text ~= "" and (self.text .. "\n" .. combined) or combined
+		self._partial_text = ""
+		self:_refresh_buf()
+	else
+		self:append(utterance)
+	end
 	if on_complete then
 		on_complete(self.text)
 	end
@@ -275,11 +299,14 @@ function Accumulator:_apply_scratchpad_response(response, utterance, on_complete
 end
 
 --- Update the scratchpad text and refresh the buffer.
+--- Clears accumulated partials after a successful LLM iteration.
 ---@param text string  the new scratchpad content
 ---@param on_complete? fun(text: string) callback
 function Accumulator:_apply_scratchpad_update(text, on_complete)
 	-- Replace the scratchpad content (not append)
 	self.text = text
+	-- Clear partials — they were incorporated into the LLM prompt and the response is the new state
+	self._partial_text = ""
 	self:_refresh_buf()
 	self._iterating = false
 
@@ -456,11 +483,32 @@ function Accumulator:_refresh_buf()
 	vim.api.nvim_set_option_value("modifiable", true, { buf = self.buf })
 	vim.api.nvim_buf_set_lines(self.buf, 0, -1, false, lines)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = self.buf })
+
+	-- Also update the scratchpad floating preview if open
+	if self._scratchpad and self._scratchpad:is_open() then
+		self._scratchpad:show(self.text, self._iterating)
+	end
+end
+
+--- Toggle the scratchpad floating preview window.
+--- Uses snacks.win for a live preview with spinner indicator during LLM calls.
+function Accumulator:toggle_scratchpad()
+	if not self._scratchpad then
+		self._scratchpad = Scratchpad:new({
+			width = self.opts.scratchpad_width or 60,
+			height = self.opts.scratchpad_height or 20,
+		})
+	end
+	self._scratchpad:toggle(self.text, self._iterating)
 end
 
 --- Clean up buffer and window.
 function Accumulator:dispose()
 	self:close_preview()
+	if self._scratchpad then
+		self._scratchpad:dispose()
+		self._scratchpad = nil
+	end
 	if self.buf and vim.api.nvim_buf_is_valid(self.buf) then
 		pcall(vim.api.nvim_buf_delete, self.buf, { force = true })
 	end
