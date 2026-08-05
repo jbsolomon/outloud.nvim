@@ -412,7 +412,7 @@ local function download_whisper_model(model_size, on_phase, on_done)
 	-- Step 1: HEAD request to get Content-Length
 	vim.system({
 		"curl",
-		"-sI",
+		"-sIL",
 		url,
 	}, { text = true }, function(res)
 		local total_bytes = nil
@@ -440,19 +440,16 @@ local function download_whisper_model(model_size, on_phase, on_done)
 		timer:start(0, 500, function()
 			local stat = vim.uv.fs_stat(dest)
 			if stat and stat.size then
-				local pct = 0
-				if total_bytes then
-					pct = math.floor((stat.size / total_bytes) * 100)
-				end
 				local mb = math.floor(stat.size / 1048576)
 				local total_mb = total_bytes and math.floor(total_bytes / 1048576) or nil
 				local elapsed = math.floor((vim.uv.now() - started) / 1000)
 				local speed = elapsed > 0 and (stat.size / elapsed / 1048576) or 0
 				local detail
 				if total_mb then
+					local pct = math.floor((stat.size / total_bytes) * 100)
 					detail = string.format("%d%% (%d/%d MB, %.1f MB/s)", pct, mb, total_mb, speed)
 				else
-					detail = string.format("%d%% (%d MB, %.1f MB/s)", pct, mb, speed)
+					detail = string.format("%d MB, %.1f MB/s", mb, speed)
 				end
 				on_phase("downloading", detail)
 			end
@@ -468,7 +465,7 @@ local function download_whisper_model(model_size, on_phase, on_done)
 			timer:stop()
 			timer:close()
 			if res.code == 0 and vim.fn.filereadable(dest) == 1 then
-				on_phase("downloading", "100%")
+				on_phase("loading")
 				on_done(true)
 			else
 				vim.schedule(function()
@@ -616,7 +613,9 @@ M._spawn_whisper_server = function(bin, model, port, on_phase, stall_ms, on_read
 		on_stderr = function(_, data, _) drain(data) end,
 		on_exit = function(_, code, _)
 			M._whisper_job_id = nil
-			if code ~= 0 then
+			if not finished then
+				finish(false, "whisper-server exited with code " .. code)
+			elseif code ~= 0 then
 				vim.schedule(function()
 					vim.notify("[outloud] whisper-server exited with code " .. code, vim.log.levels.WARN)
 				end)
