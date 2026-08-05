@@ -11,9 +11,9 @@ local WHISPER_MODEL_SIZES = {
 
 --- Resolve the data directory for outloud artifacts.
 local function data_dir()
-    local base = vim.fn.expand("$XDG_DATA_HOME")
-    if base == "" or base == "v:null" then
-        base = vim.fn.expand("~/.local/share")
+    local base = vim.env.XDG_DATA_HOME
+    if not base or base == "" then
+        base = vim.env.LOCALAPPDATA or (vim.env.HOME .. "/.local/share")
     end
     return base .. "/outloud"
 end
@@ -52,7 +52,9 @@ local function probe_server_sync(port, health_path)
         "2",
         url,
     })
-    return ok and res == ""
+    -- curl -sf produces empty stdout on both success AND connection failure,
+    -- so we must check the exit code via v:shell_error.
+    return ok and res == "" and vim.v.shell_error == 0
 end
 
 --- Report file info (size, modification date) for a model path.
@@ -144,8 +146,8 @@ function M.check()
 			if xdg_cache ~= "" and xdg_cache ~= "v:null" then
 				table.insert(cache_dirs, xdg_cache .. "/llama.cpp")
 			end
-			table.insert(cache_dirs, vim.fn.expand("~/.cache/llama.cpp"))
-			table.insert(cache_dirs, vim.fn.expand("~/Library/Caches/llama.cpp"))
+			table.insert(cache_dirs, vim.env.HOME .. "/.cache/llama.cpp")
+			table.insert(cache_dirs, vim.env.HOME .. "/Library/Caches/llama.cpp")
 
 			local found = false
 			for _, cache_dir in ipairs(cache_dirs) do

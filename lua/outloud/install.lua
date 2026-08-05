@@ -299,9 +299,9 @@ M._whisper_job_id = nil
 --- Get the data directory for outloud artifacts.
 ---@return string
 local function data_dir()
-	local base = vim.fn.expand("$XDG_DATA_HOME")
-	if base == "" or base == "v:null" then
-		base = vim.fn.expand("~/.local/share")
+	local base = vim.env.XDG_DATA_HOME
+	if not base or base == "" then
+		base = vim.env.LOCALAPPDATA or (vim.env.HOME .. "/.local/share")
 	end
 	local d = base .. "/outloud"
 	vim.fn.mkdir(d, "p")
