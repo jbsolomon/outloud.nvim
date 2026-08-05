@@ -214,6 +214,58 @@ local function build_daemon_env(backend, model, audio)
 	}
 end
 
+--- Probe an external STT server to see if it's online.
+---@param url string the server URL
+---@param cb fun(ok: boolean)
+local function probe_external_server(url, cb)
+	-- Extract host and port, determine health path from backend
+	local host, port = url:match("^https%-?://([^:/]+)(?::(%d+))?/?.*")
+	if not host then
+		vim.schedule(function()
+			cb(false)
+		end)
+		return
+	end
+	port = tonumber(port) or 80
+
+	-- Try the health endpoint first, then root
+	local health_paths = { "/health", "/" }
+	local idx = 1
+
+	local function try_next()
+		if idx > #health_paths then
+			-- All probes failed
+			vim.schedule(function()
+				cb(false)
+			end)
+			return
+		end
+		local path = health_paths[idx]
+		local probe_url = string.format("http://%s:%d%s", host, port, path)
+
+		vim.system({
+			"curl",
+			"-sf",
+			"--connect-timeout",
+			"2",
+			"--max-time",
+			"3",
+			probe_url,
+		}, { text = true }, function(res)
+			if res.code == 0 then
+				vim.schedule(function()
+					cb(true)
+				end)
+			else
+				idx = idx + 1
+				try_next()
+			end
+		end)
+	end
+
+	try_next()
+end
+
 --- Start voice + UI, auto-launching the STT server if needed.
 function M.start()
 	if M._voice and M._voice:is_running() then
@@ -274,10 +326,24 @@ function M.start()
 			}, on_server_ready)
 		end
 	else
-		signal("stt", "up")
-		ui_state("starting_daemon")
-		M._start_pipeline()
-		ui_state("ready")
+		-- External server: probe it first
+		signal("stt", "starting")
+		ui_state("starting_server")
+		probe_external_server(M.config.model.server_url, function(ok)
+			if ok then
+				signal("stt", "up")
+				ui_state("starting_daemon")
+				M._start_pipeline()
+				ui_state("ready")
+			else
+				signal("stt", "error")
+				ui_state("inactive", "external server unreachable")
+				vim.notify(
+					"[outloud] external STT server unreachable: " .. M.config.model.server_url,
+					vim.log.levels.ERROR
+				)
+			end
+		end)
 	end
 end
 
