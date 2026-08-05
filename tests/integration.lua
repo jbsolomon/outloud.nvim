@@ -950,6 +950,139 @@ assert_eq(ls.config.accumulator.mode, "scratchpad", "scratchpad mode set in conf
 ls.setup({})
 
 -- ============================================================================
+-- Test 17: CodeCompanion Integration (Mocked)
+-- ============================================================================
+section("17. CodeCompanion Integration")
+
+-- Mock CodeCompanion to capture what the accumulator calls it with
+local captured_chat_args = nil
+local captured_chat_callback = nil
+local mock_cc = {
+    chat = function(args)
+        captured_chat_args = args
+        -- Capture the callback (if any)
+        captured_chat_callback = args.callbacks and args.callbacks.on_completed
+    end,
+}
+
+-- Temporarily replace CodeCompanion in package.loaded
+local original_cc = package.loaded["CodeCompanion"]
+package.loaded["CodeCompanion"] = mock_cc
+
+-- Test iterate with handler.name calls CodeCompanion.chat with correct API
+local cc_iterate_acc = Accumulator:new({
+    mode = "scratchpad",
+    handler = { name = "local-llama.cpp" },
+})
+cc_iterate_acc:append("existing scratchpad content")
+
+local iterate_complete_called = false
+cc_iterate_acc:iterate("add a new function", function(text)
+    iterate_complete_called = true
+end)
+
+-- Verify the accumulator called CodeCompanion.chat (not some other API)
+assert_ok(captured_chat_args ~= nil, "iterate with handler.name calls CodeCompanion.chat")
+
+-- Verify it uses the correct CodeCompanion API structure
+assert_type(captured_chat_args.params, "table", "chat args has params table")
+assert_type(captured_chat_args.messages, "table", "chat args has messages array")
+assert_eq(captured_chat_args.auto_submit, true, "chat args has auto_submit=true")
+assert_eq(captured_chat_args.hidden, true, "chat args has hidden=true")
+assert_type(captured_chat_args.callbacks, "table", "chat args has callbacks table")
+if captured_chat_args.callbacks then
+    assert_type(captured_chat_args.callbacks.on_completed, "function", "chat args has on_completed callback")
+else
+    assert_ok(false, "chat args has on_completed callback (callbacks is nil)")
+end
+
+-- Verify the adapter is specified in params
+if captured_chat_args.params then
+    assert_type(captured_chat_args.params.adapter, "string", "params.adapter is a string")
+    assert_ok(#captured_chat_args.params.adapter > 0, "params.adapter is not empty")
+else
+    assert_ok(false, "params.adapter is a string (params is nil)")
+end
+
+-- Verify messages are in the correct format
+if captured_chat_args.messages then
+    assert_ok(#captured_chat_args.messages >= 1, "messages array has at least one message")
+    assert_type(captured_chat_args.messages[1].role, "string", "first message has role field")
+    assert_type(captured_chat_args.messages[1].content, "string", "first message has content field")
+
+    -- Verify the message content contains the scratchpad prompt
+    local msg_content = captured_chat_args.messages[1].content
+    assert_ok(msg_content:find("<scratchpad>"), "message contains scratchpad tag")
+    assert_ok(msg_content:find("<instruction>"), "message contains instruction tag")
+    assert_ok(msg_content:find("add a new function"), "message contains the utterance")
+else
+    assert_ok(false, "message contains scratchpad tag (messages is nil)")
+    assert_ok(false, "message contains instruction tag (messages is nil)")
+    assert_ok(false, "message contains the utterance (messages is nil)")
+end
+
+-- Simulate the callback being called with a chat object that has the response
+local mock_chat = {
+    messages = {
+        { role = "assistant", content = "refined scratchpad content" }
+    }
+}
+if captured_chat_callback then
+    captured_chat_callback(mock_chat)
+end
+assert_ok(iterate_complete_called, "on_completed callback was called")
+assert_eq(cc_iterate_acc._iterating, false, "gate is clear after callback")
+
+cc_iterate_acc:dispose()
+
+-- Test confirm with handler.name also uses correct CodeCompanion API
+captured_chat_args = nil
+captured_chat_callback = nil
+
+local cc_confirm_acc = Accumulator:new({
+    handler = { name = "local-llama.cpp" },
+})
+cc_confirm_acc:append("voice input text")
+
+-- Create a buffer for confirm to work with
+local confirm_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_set_current_buf(confirm_buf)
+vim.api.nvim_buf_set_lines(confirm_buf, 0, -1, false, { "existing buffer line" })
+
+local confirm_result = nil
+cc_confirm_acc:confirm(function(text)
+    confirm_result = text
+end)
+
+assert_ok(captured_chat_args ~= nil, "confirm with handler.name calls CodeCompanion.chat")
+assert_type(captured_chat_args.params, "table", "confirm chat args has params table")
+assert_type(captured_chat_args.messages, "table", "confirm chat args has messages array")
+assert_type(captured_chat_args.callbacks, "table", "confirm chat args has callbacks table")
+
+cc_confirm_acc:dispose()
+vim.api.nvim_buf_delete(confirm_buf, { force = true })
+
+-- Restore original CodeCompanion
+package.loaded["CodeCompanion"] = original_cc
+
+-- Test that missing CodeCompanion still falls back gracefully
+package.loaded["CodeCompanion"] = nil
+local fallback_acc = Accumulator:new({
+    handler = { name = "some-adapter" },
+})
+fallback_acc:append("fallback text")
+local fallback_result = nil
+fallback_acc:iterate("utterance", function(text)
+    fallback_result = text
+end)
+assert_eq(fallback_result, "fallback text utterance", "missing CodeCompanion falls back to direct append")
+
+fallback_acc:dispose()
+
+-- Restore for any remaining tests
+package.loaded["CodeCompanion"] = original_cc
+
+-- ============================================================================
 -- Summary
 -- ============================================================================
 section("Results")

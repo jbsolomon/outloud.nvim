@@ -21,7 +21,7 @@ function M.run()
 	-- Build daemon binary
 	if vim.fn.executable("outloud") == 0 then
 		vim.notify("[outloud] building daemon binary...")
-		local plugin_dir = debug.getinfo(1, "S").source:match("@(.*/)")
+		local plugin_dir = debug.getinfo(1, "S").source:match("@(.*/)" )
 		if plugin_dir then
 			plugin_dir = plugin_dir:gsub("/lua/outloud/$", "")
 		end
@@ -51,7 +51,18 @@ function M.run()
 		vim.notify("[outloud] daemon binary already installed")
 	end
 
-	vim.notify("[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO)
+	-- Show backend-appropriate model info
+	local outloud = require("outloud")
+	local cfg = outloud.config.backend or outloud.defaults.backend or "whisper"
+	if cfg == "openai" then
+		vim.notify(
+			"[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO
+		)
+	else
+		vim.notify(
+			"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. (outloud.config.model and outloud.config.model.size or outloud.defaults.model.size) .. ")"
+		)
+	end
 end
 
 -- llama-server process management

@@ -217,11 +217,24 @@ function Accumulator:iterate(utterance, on_complete)
 		if ok and cc.chat then
 			vim.notify("[outloud] scratchpad: refining with CodeCompanion", vim.log.levels.INFO)
 			cc.chat({
-				handler = handler.name,
-				message = prompt,
-				callback = function(response)
-					self:_apply_scratchpad_response(response, utterance, on_complete)
-				end,
+				params = { adapter = handler.name },
+				messages = { { role = "user", content = prompt } },
+				auto_submit = true,
+				hidden = true,
+				callbacks = {
+					on_completed = function(chat)
+						-- Extract assistant response from chat messages
+						local response_text = ""
+						if chat and chat.messages then
+							for _, msg in ipairs(chat.messages) do
+								if msg.role == "assistant" then
+									response_text = msg.content or ""
+								end
+							end
+						end
+						self:_apply_scratchpad_update(response_text, on_complete)
+					end,
+				},
 			})
 			return
 		end
@@ -309,35 +322,33 @@ function Accumulator:confirm(on_complete)
 		if ok then
 			-- CodeCompanion is available — use it
 			vim.notify("[outloud] sending to CodeCompanion handler: " .. handler.name, vim.log.levels.INFO)
-			-- CodeCompanion integration: send prompt and apply response
-			-- This is a best-effort integration since CodeCompanion APIs vary
-			local function apply_response(response)
-				local result_text = response and response.text or response or ""
-				if type(result_text) == "table" then
-					result_text = table.concat(result_text, "\n")
-				end
-				if on_complete then
-					on_complete(result_text)
-				else
-					self:_insert_at_cursor(result_text)
-				end
-			end
-
-			-- Try the chat API
-			if cc.chat then
-				-- CodeCompanion v2+ style
-				cc.chat({
-					handler = handler.name,
-					message = prompt,
-					callback = apply_response,
-				})
-			else
-				-- Fallback: direct insertion
-				self:_insert_at_cursor(self.text)
-				if on_complete then
-					on_complete(self.text)
-				end
-			end
+			cc.chat({
+				params = { adapter = handler.name },
+				messages = { { role = "user", content = prompt } },
+				auto_submit = true,
+				hidden = true,
+				callbacks = {
+					on_completed = function(chat)
+						-- Extract assistant response from chat messages
+						local result_text = ""
+						if chat and chat.messages then
+							for _, msg in ipairs(chat.messages) do
+								if msg.role == "assistant" then
+									result_text = msg.content or ""
+								end
+							end
+						end
+						if type(result_text) == "table" then
+							result_text = table.concat(result_text, "\n")
+						end
+						if on_complete then
+							on_complete(result_text)
+						else
+							self:_insert_at_cursor(result_text)
+						end
+					end,
+				},
+			})
 			return
 		end
 	end
