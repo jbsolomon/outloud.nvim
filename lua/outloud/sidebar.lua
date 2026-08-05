@@ -721,10 +721,10 @@ function Sidebar:open(focus)
 		return
 	end
 
-	self.win = Snacks.win({
+self.win = Snacks.win({
 		position = self.opts.position == "left" and "top-left" or "top-right",
 		width = self.opts.width,
-		height = "100%",
+		height = vim.o.lines - 2,
 		border = "none",
 		zindex = 40,
 		enter = false,
