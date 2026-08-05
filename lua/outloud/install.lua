@@ -391,10 +391,12 @@ local function download_whisper_server(on_done)
 	end)
 end
 
---- Download a whisper model from HuggingFace.
+--- Download a whisper model from HuggingFace with progress reporting.
+--- Uses a HEAD request to get Content-Length, then polls file size via uv.fs_stat.
 ---@param model_size string
+---@param on_phase fun(phase: string, detail?: string)
 ---@param on_done fun(ok: boolean, detail?: string)
-local function download_whisper_model(model_size, on_done)
+local function download_whisper_model(model_size, on_phase, on_done)
 	local fname = WHISPER_MODEL_SIZES[model_size] or WHISPER_MODEL_SIZES.medium
 	local model_dir = data_dir() .. "/models"
 	vim.fn.mkdir(model_dir, "p")
@@ -405,18 +407,66 @@ local function download_whisper_model(model_size, on_done)
 
 	vim.notify("[outloud] downloading whisper model (" .. model_size .. ")...", vim.log.levels.INFO)
 
+	on_phase("downloading", "connecting...")
+
+	-- Step 1: HEAD request to get Content-Length
 	vim.system({
 		"curl",
-		"-fSL",
-		"--output",
-		dest,
+		"-sI",
 		url,
-	}, {}, function(res)
-		if res.code == 0 and vim.fn.filereadable(dest) == 1 then
-			on_done(true)
-		else
-			on_done(false, "failed to download model (curl exit " .. res.code .. ")")
+	}, { text = true }, function(res)
+		local total_bytes = nil
+		if res.code == 0 then
+			for line in res.stdout:gsub("\r", ""):gmatch("[^\n]+") do
+				local val = line:match("^Content-Length%s*:%s*(%d+)")
+				if val then
+					total_bytes = tonumber(val)
+					break
+				end
+			end
 		end
+
+		-- Step 2: Start the actual download
+		local timer = vim.uv.new_timer()
+		local started = vim.uv.now()
+
+		timer:start(0, 500, function()
+			local stat = vim.uv.fs_stat(dest)
+			if stat and stat.size then
+				local pct = 0
+				if total_bytes then
+					pct = math.floor((stat.size / total_bytes) * 100)
+				end
+				local mb = math.floor(stat.size / 1048576)
+				local total_mb = total_bytes and math.floor(total_bytes / 1048576) or nil
+				local elapsed = math.floor((vim.uv.now() - started) / 1000)
+				local speed = elapsed > 0 and (stat.size / elapsed / 1048576) or 0
+				local detail
+				if total_mb then
+					detail = string.format("%d%% (%d/%d MB, %.1f MB/s)", pct, mb, total_mb, speed)
+				else
+					detail = string.format("%d%% (%d MB, %.1f MB/s)", pct, mb, speed)
+				end
+				on_phase("downloading", detail)
+			end
+		end)
+
+		vim.system({
+			"curl",
+			"-fSL",
+			"--output",
+			dest,
+			url,
+		}, {}, function(res)
+			timer:stop()
+			timer:close()
+			if res.code == 0 and vim.fn.filereadable(dest) == 1 then
+				on_phase("downloading", "100%")
+				on_done(true)
+			else
+				on_done(false, "failed to download model (curl exit " .. res.code .. ")")
+			end
+		end)
 	end)
 end
 
@@ -500,7 +550,7 @@ M._ensure_model_and_start = function(bin, port, model_size, model_path, on_phase
 	local model = find_whisper_model(model_size, model_path)
 	if not model then
 		on_phase("downloading", "downloading model (" .. model_size .. ")")
-		download_whisper_model(model_size, function(ok, detail)
+		download_whisper_model(model_size, on_phase, function(ok, detail)
 			if not ok then
 				on_phase("error", detail or "failed to download model")
 				return

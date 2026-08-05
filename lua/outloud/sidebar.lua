@@ -80,7 +80,7 @@ local BUSY = {
 
 local STATE_LABEL = {
 	starting_server = "starting STT server...",
-	downloading_model = "downloading model",
+	downloading_model = "downloading...",
 	loading_model = "loading model...",
 	starting_daemon = "starting daemon...",
 	ready = "press <Space> to record",
