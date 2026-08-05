@@ -34,7 +34,7 @@ mod tests {
         let event2 = event_rx.try_recv().unwrap();
 
         assert!(matches!(event1, Event::Transcript { .. }));
-        assert!(matches!(event2, Event::Status { state: State::Idle }));
+        assert!(matches!(event2, Event::Status { state: State::Idle, device: None }));
     }
 
     #[tokio::test]
@@ -74,7 +74,7 @@ mod tests {
         let event2 = event_rx.try_recv().unwrap();
 
         assert!(matches!(event1, Event::Error { .. }));
-        assert!(matches!(event2, Event::Status { state: State::Idle }));
+        assert!(matches!(event2, Event::Status { state: State::Idle, device: None }));
     }
 
     #[tokio::test]
@@ -110,7 +110,7 @@ impl Sink for EventSink {
             .map_err(|_| StreamSafeError::ChannelClosed)?;
         if !is_partial {
             self.event_tx
-                .send(Event::Status { state: State::Idle })
+                .send(Event::Status { state: State::Idle, device: None })
                 .await
                 .map_err(|_| StreamSafeError::ChannelClosed)?;
         }

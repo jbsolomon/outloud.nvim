@@ -9,7 +9,7 @@ local M = {}
 ---@class outloud.Config
 ---@field backend? string "whisper" (default) or "openai" (OpenAI-compatible)
 ---@field model { size?: string, path?: string, hf_repo?: string, server_port: number, server_url?: string }
----@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean }
+---@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean, device?: string }
 ---@field accumulator { enabled: boolean, mode: string, handler?: table, context: table }
 ---@field ui { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
 ---@field keys { push_to_talk: string, cancel: string, sidebar: string }
@@ -33,6 +33,7 @@ M.defaults = {
 		partial_interval_ms = 700,
 		window_ms = 5000,
 		live_buffer = true,
+		device = nil,   -- optional default device name
 	},
 	accumulator = {
 		enabled = false,
@@ -88,6 +89,9 @@ M._state = "inactive"
 
 ---@type boolean
 M._listening = false
+
+---@type string?
+M._active_device = nil
 
 ---@type table?
 M._partial_range = nil
@@ -175,7 +179,7 @@ function M.setup(opts)
 			M._voice:stop_listening()
 			M._listening = false
 		else
-			M._voice:start_listening()
+			M._voice:start_listening(M.config.audio.device)
 			M._listening = true
 		end
 	end, { desc = "outloud: toggle recording" })
@@ -197,6 +201,7 @@ local function build_daemon_env(backend, model, audio)
 		OUTLOUD_MAX_MS = tostring(audio.max_duration_ms),
 		OUTLOUD_PARTIAL_MS = tostring(audio.partial_interval_ms),
 		OUTLOUD_WINDOW_MS = tostring(audio.window_ms),
+		OUTLOUD_MIC_DEVICE = audio.device or "",
 	}
 end
 
@@ -433,14 +438,18 @@ function M._start_pipeline()
 		end
 	end)
 
-	M._voice:on_status(function(state)
+	M._voice:on_status(function(state, device)
 		M._state = state
+		M._active_device = device
 		ui.set_state(state)
+		ui.set_device(device)
 		vim.schedule(function()
 			if state == "listening" then
 				M._ensure_sidebar():set_state("listening")
+				M._ensure_sidebar():set_device(device)
 			elseif state == "transcribing" then
 				M._ensure_sidebar():set_state("transcribing")
+				M._ensure_sidebar():set_device(device)
 			end
 		end)
 	end)
@@ -451,6 +460,20 @@ function M._start_pipeline()
 			local sb = M._ensure_sidebar()
 			sb:set_status("daemon", "error")
 			sb:add_error("daemon: " .. message)
+		end)
+	end)
+
+	M._voice:on_devices(function(devices, default)
+		vim.schedule(function()
+			local names = {}
+			for _, d in ipairs(devices) do
+				local mark = d.is_default and " *" or ""
+				names[#names + 1] = d.name .. mark
+			end
+			vim.notify(
+				"[outloud] input devices:\n" .. table.concat(names, "\n"),
+				vim.log.levels.INFO
+			)
 		end)
 	end)
 
@@ -492,6 +515,15 @@ end
 ---@return string
 function M.status()
 	return ui.statusline()
+end
+
+--- List available input devices.
+function M.list_devices()
+	if not M._voice or not M._voice:is_running() then
+		vim.notify("[outloud] daemon not running", vim.log.levels.WARN)
+		return
+	end
+	M._voice:list_devices()
 end
 
 --- Confirm the accumulated text: invoke the handler and apply the result.

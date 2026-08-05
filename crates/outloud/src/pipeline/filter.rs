@@ -5,6 +5,7 @@ use streamsafe::{FilterTransform, Result};
 /// Data extracted from an utterance, passed downstream for transcription.
 pub struct UtteranceData {
     pub samples: Vec<f32>,
+    pub sample_rate: u32,
     pub duration_ms: u64,
     /// False for interim (partial) snapshots, true for the finalized utterance.
     pub is_final: bool,
@@ -39,11 +40,13 @@ impl FilterTransform for VadFilter {
             }
             AudioEvent::Partial {
                 samples,
+                sample_rate,
                 window_start_ms,
                 window_end_ms,
                 seq,
             } => Ok(Some(UtteranceData {
                 samples,
+                sample_rate,
                 duration_ms: window_end_ms - window_start_ms,
                 is_final: false,
                 window_start_ms,
@@ -52,16 +55,19 @@ impl FilterTransform for VadFilter {
             })),
             AudioEvent::Utterance {
                 samples,
+                sample_rate,
                 duration_ms,
             } => {
                 let _ = self
                     .event_tx
                     .send(Event::Status {
                         state: State::Transcribing,
+                        device: None,
                     })
                     .await;
                 Ok(Some(UtteranceData {
                     samples,
+                    sample_rate,
                     duration_ms,
                     is_final: true,
                     window_start_ms: 0,
@@ -71,6 +77,10 @@ impl FilterTransform for VadFilter {
             }
             AudioEvent::Error(msg) => {
                 let _ = self.event_tx.send(Event::Error { message: msg }).await;
+                Ok(None)
+            }
+            AudioEvent::DeviceInfo { .. } => {
+                // DeviceInfo is handled by the command loop, not the pipeline
                 Ok(None)
             }
         }
@@ -109,12 +119,14 @@ mod tests {
         let result = filter
             .apply(AudioEvent::Utterance {
                 samples: samples.clone(),
+                sample_rate: 16000,
                 duration_ms: 100,
             })
             .await
             .unwrap()
             .unwrap();
         assert_eq!(result.samples, samples);
+        assert_eq!(result.sample_rate, 16000);
         assert_eq!(result.duration_ms, 100);
         assert!(result.is_final);
         assert_eq!(result.window_start_ms, 0);
@@ -129,6 +141,7 @@ mod tests {
         let result = filter
             .apply(AudioEvent::Partial {
                 samples: samples.clone(),
+                sample_rate: 16000,
                 window_start_ms: 500,
                 window_end_ms: 5500,
                 seq: 3,
@@ -137,6 +150,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(result.samples, samples);
+        assert_eq!(result.sample_rate, 16000);
         assert!(!result.is_final);
         assert_eq!(result.window_start_ms, 500);
         assert_eq!(result.window_end_ms, 5500);

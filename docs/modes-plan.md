@@ -1,5 +1,36 @@
 # Plan: Sliding Window & Accumulator Modes
 
+## Completed: Audio Device Selection Refactor (Aug 2025)
+
+The daemon now supports **per-session device selection** without restarting. The cpal stream is opened lazily on `start_listening` and closed on `stop_listening`, allowing device switching between sessions.
+
+### What changed:
+
+**Rust daemon (`crates/outloud/src/`):**
+- `audio.rs` — `AudioCapture::new()` returns `(Self, mpsc::Receiver<AudioEvent>)`. The receiver is handed to the pipeline once at startup; sessions write into the shared sender. `start(device_name: Option<&str>)` opens the cpal stream on a background thread, returns `()`. `stop()` signals the thread to drop the stream. `sample_rate` is now per-utterance (carried in `Partial`/`Utterance` events), enabling device switching. `list_devices()` returns available input devices.
+- `main.rs` — No stream opened at startup. Pipeline built once from shared channel. `start_listening` command accepts optional `device` field. `stop_listening`/`cancel` close the stream. `list_devices` command returns device list.
+- `pipeline/filter.rs` — `UtteranceData` carries `sample_rate`. `Event::Status` carries `device` field.
+- `pipeline/transform.rs` — Takes `sample_rate` from `UtteranceData` input (per-utterance), not constructor.
+- `pipeline/sink.rs` — `Event::Status` carries `device` field.
+- `protocol.rs` — `StartListening` command accepts optional `device`. `Status` event carries `device`. New `Devices` event, `DeviceInfo` struct, `ListDevices` command.
+
+**Lua plugin (`lua/outloud/`):**
+- `voice.lua` — `start_listening(device?)` accepts optional device name. `on_status` callback receives `(state, device)`. New `list_devices()` method and `on_devices` callback.
+- `init.lua` — `audio.device` config option. Passes `OUTLOUD_MIC_DEVICE` env var. Wires device info from status events. `:OutloudDevices` command lists available devices.
+- `plugin/outloud.vim` — Added `:OutloudDevices` command.
+
+### Remaining work:
+
+1. **Device picker** — Interactive device selection UI (e.g. picker menu from `:OutloudDevices` results)
+2. **Config persistence** — Remember last-used device across Neovim sessions
+
+### Completed (Aug 2025):
+
+- ✅ **Sidebar device display** — Device name shown in header signals row (`🎤 Blue Yeti` or `🎤 default`)
+- ✅ **Statusline device** — `ui.lua` returns `ls:mic [Blue Yeti]` when device is set
+
+---
+
 ## Context
 
 The daemon **already emits partial transcripts** every ~700ms (`partial_interval_ms`) while the user is speaking. These partials flow through the pipeline, get transcribed, and arrive as `partial` events in the plugin sidebar. The transcript is inserted directly into the buffer at the cursor position.

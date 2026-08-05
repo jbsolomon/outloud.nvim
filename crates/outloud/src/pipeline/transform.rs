@@ -16,9 +16,11 @@ use super::filter::UtteranceData;
 /// partial has already started, the stale result is silently discarded.
 ///
 /// Uses `spawn_blocking` because `SpeechTranscriber::transcribe` is synchronous.
+///
+/// Sample rate is taken from each `UtteranceData` input (per-utterance),
+/// allowing device switching between sessions without restarting the daemon.
 pub struct TranscribeTransform {
     transcriber: Arc<dyn SpeechTranscriber>,
-    sample_rate: u32,
     stt_available: bool,
     /// Tracks the highest sequence number currently in-flight. Used to discard
     /// stale partial results that complete after a newer partial has started.
@@ -28,12 +30,10 @@ pub struct TranscribeTransform {
 impl TranscribeTransform {
     pub fn new(
         transcriber: Arc<dyn SpeechTranscriber>,
-        sample_rate: u32,
         stt_available: bool,
     ) -> Self {
         Self {
             transcriber,
-            sample_rate,
             stt_available,
             latest_seq: Arc::new(AtomicU64::new(0)),
         }
@@ -46,7 +46,7 @@ impl Transform for TranscribeTransform {
 
     async fn apply(&mut self, input: UtteranceData) -> Result<Event> {
         let transcriber = self.transcriber.clone();
-        let sample_rate = self.sample_rate;
+        let sample_rate = input.sample_rate;
         let stt_available = self.stt_available;
         let duration_ms = input.duration_ms;
         let is_final = input.is_final;

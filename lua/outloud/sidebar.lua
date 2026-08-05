@@ -16,6 +16,7 @@ local M = {}
 ---@field win number?
 ---@field opts { width: number, position: string }
 ---@field state string
+---@field device string?
 ---@field status table<string, string>
 ---@field entries table[]
 ---@field open_kind string?
@@ -197,6 +198,7 @@ function Sidebar:new(opts)
 		keys = opts.keys or {},
 		show_help = false,
 		state = "inactive",
+		device = nil,
 		detail = nil,
 		status = { stt = "down", daemon = "down" },
 		entries = {},
@@ -327,6 +329,13 @@ function Sidebar:_render_header()
 		hl = SIGNAL_HL[item[2]] or "OutloudSignalDown",
 		}
 		signal_line = signal_line .. glyph .. " " .. item[1] .. "  "
+	end
+
+	-- Append device info if available
+	if self.device and self.device ~= "" then
+		signal_line = signal_line .. "🎤 " .. self.device
+	elseif self.state == "listening" or self.state == "transcribing" then
+		signal_line = signal_line .. "🎤 default"
 	end
 
 	local label = STATE_LABEL[self.state] or self.state
@@ -593,6 +602,12 @@ end
 ---@param value string one of "down", "starting", "up", "error"
 function Sidebar:set_status(key, value)
 	self.status[key] = value
+	self:_render_header()
+end
+
+---@param device? string device name or nil for default
+function Sidebar:set_device(device)
+	self.device = device
 	self:_render_header()
 end
 

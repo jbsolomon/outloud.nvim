@@ -6,20 +6,29 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "cmd")]
 pub enum Command {
     #[serde(rename = "start_listening")]
-    StartListening,
+    StartListening {
+        /// Optional device name to use for this listening session.
+        /// If omitted, falls back to config default or system default.
+        device: Option<String>,
+    },
     #[serde(rename = "stop_listening")]
     StopListening,
     #[serde(rename = "cancel")]
     Cancel,
     #[serde(rename = "shutdown")]
     Shutdown,
+    #[serde(rename = "list_devices")]
+    ListDevices,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum Event {
     #[serde(rename = "status")]
-    Status { state: State },
+    Status {
+        state: State,
+        device: Option<String>,
+    },
     #[serde(rename = "vad")]
     Vad { speaking: bool },
     /// An interim, non-final transcript emitted while the user is still
@@ -36,6 +45,19 @@ pub enum Event {
     Transcript { text: String, duration_ms: u64 },
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "devices")]
+    Devices {
+        devices: Vec<DeviceInfo>,
+        default: Option<String>,
+    },
+}
+
+/// Information about an available input device.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeviceInfo {
+    pub name: String,
+    #[serde(rename = "is_default")]
+    pub is_default: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -93,7 +115,18 @@ mod tests {
     #[test]
     fn parse_start_listening() {
         let cmd = parse_command(r#"{"cmd": "start_listening"}"#).unwrap();
-        assert!(matches!(cmd, Command::StartListening));
+        assert!(matches!(cmd, Command::StartListening { device: None }));
+    }
+
+    #[test]
+    fn parse_start_listening_with_device() {
+        let cmd = parse_command(r#"{"cmd": "start_listening", "device": "Blue Yeti"}"#).unwrap();
+        match cmd {
+            Command::StartListening { device } => {
+                assert_eq!(device.as_deref(), Some("Blue Yeti"));
+            }
+            _ => panic!("expected StartListening"),
+        }
     }
 
     #[test]
@@ -141,9 +174,23 @@ mod tests {
     fn status_event_serializes() {
         let line = serialize_event(&Event::Status {
             state: State::Listening,
+            device: Some("Blue Yeti".to_string()),
         })
         .unwrap();
-        assert_eq!(line, r#"{"type":"status","state":"listening"}"#);
+        assert_eq!(
+            line,
+            r#"{"type":"status","state":"listening","device":"Blue Yeti"}"#
+        );
+    }
+
+    #[test]
+    fn status_event_serializes_null_device() {
+        let line = serialize_event(&Event::Status {
+            state: State::Idle,
+            device: None,
+        })
+        .unwrap();
+        assert_eq!(line, r#"{"type":"status","state":"idle","device":null}"#);
     }
 
     #[test]

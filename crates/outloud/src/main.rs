@@ -83,16 +83,58 @@ async fn stdin_command_loop(
 
             match parse_command(&line) {
                 Ok(cmd) => match cmd {
-                    outloud::protocol::Command::StartListening => {
-                        audio.set_listening(true);
-                        let _ = event_tx.blocking_send(Event::Status {
-                            state: State::Listening,
-                        });
+                    outloud::protocol::Command::StartListening { device } => {
+                        // Open the cpal stream on the requested device.
+                        // Audio events flow into the shared channel that the
+                        // pipeline is already reading from.
+                        match audio.start(device.as_deref()) {
+                            Ok(()) => {
+                                let active = audio.device_name();
+                                let _ = event_tx.blocking_send(Event::Status {
+                                    state: State::Listening,
+                                    device: active,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.blocking_send(Event::Error {
+                                    message: format!("failed to start capture: {e}"),
+                                });
+                            }
+                        }
                     }
                     outloud::protocol::Command::StopListening
                     | outloud::protocol::Command::Cancel => {
-                        audio.set_listening(false);
-                        let _ = event_tx.blocking_send(Event::Status { state: State::Idle });
+                        audio.stop();
+                        let _ = event_tx.blocking_send(Event::Status {
+                            state: State::Idle,
+                            device: None,
+                        });
+                    }
+                    outloud::protocol::Command::ListDevices => {
+                        match AudioCapture::list_devices() {
+                            Ok(devs) => {
+                                let devices: Vec<outloud::protocol::DeviceInfo> = devs
+                                    .into_iter()
+                                    .map(|(name, is_default)| outloud::protocol::DeviceInfo {
+                                        name,
+                                        is_default,
+                                    })
+                                    .collect();
+                                let default = devices
+                                    .iter()
+                                    .find(|d| d.is_default)
+                                    .map(|d| d.name.clone());
+                                let _ = event_tx.blocking_send(Event::Devices {
+                                    devices,
+                                    default,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.blocking_send(Event::Error {
+                                    message: format!("listing devices failed: {e}"),
+                                });
+                            }
+                        }
                     }
                     outloud::protocol::Command::Shutdown => {
                         token.cancel();
@@ -121,7 +163,11 @@ async fn main() -> Result<()> {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(64);
 
     // Initial status.
-    let _ = event_tx.send(Event::Status { state: State::Idle }).await;
+    let _ = event_tx.send(Event::Status {
+        state: State::Idle,
+        device: None,
+    })
+    .await;
 
     // Transcription backend.
     let transcriber: Arc<dyn SpeechTranscriber> = Arc::from(build_transcriber()?);
@@ -135,11 +181,11 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Audio capture.
-    let audio = Arc::new(AudioCapture::new(AudioConfig::from_env()));
-    let device_sample_rate = audio.sample_rate();
-    let sync_rx = audio.start()?;
-    audio.set_listening(false);
+    // Audio capture — no stream opened yet. The pipeline reads from the shared
+    // channel; individual sessions open/close the cpal stream via start()/stop().
+    // new() returns (self, receiver) — receiver goes to pipeline, self is shared via Arc.
+    let (audio, sync_rx) = AudioCapture::new(AudioConfig::from_env());
+    let audio = Arc::new(audio);
 
     let token = CancellationToken::new();
 
@@ -153,12 +199,12 @@ async fn main() -> Result<()> {
         token.clone(),
     ));
 
-    // Build and run the pipeline.
+    // Build and run the pipeline. The pipeline is built once and reads from the
+    // shared audio event channel. Start/stop commands control the cpal stream.
     let pipeline_result = PipelineBuilder::from(AudioSource::new(sync_rx))
         .filter_pipe(VadFilter::new(event_tx.clone()))
         .pipe(TranscribeTransform::new(
             transcriber,
-            device_sample_rate,
             stt_available,
         ))
         .into(EventSink::new(event_tx))
@@ -166,9 +212,10 @@ async fn main() -> Result<()> {
         .await;
 
     // Cleanup.
-    audio.set_listening(false);
+    audio.stop();
     let _ = stdin_handle.await;
     let _ = writer_handle.await;
 
     pipeline_result.map_err(|e| anyhow::anyhow!("{e}"))
 }
+

@@ -13,6 +13,7 @@ command! OutloudUndo lua vim.notify('[outloud] undo is no longer available in tr
 command! OutloudSnapshots lua vim.notify('[outloud] snapshots are no longer available in transcription-only mode', vim.log.levels.WARN)
 command! OutloudSnapshotsPrune lua vim.notify('[outloud] snapshots are no longer available in transcription-only mode', vim.log.levels.WARN)
 command! OutloudInstall lua require('outloud.install').run()
+command! OutloudDevices lua require('outloud').list_devices()
 command! VoiceConfirmBuf lua require('outloud').confirm_accumulator()
 command! VoiceCancelBuf lua require('outloud').cancel_accumulator()
 command! VoiceClearBuf lua require('outloud').clear_accumulator()
