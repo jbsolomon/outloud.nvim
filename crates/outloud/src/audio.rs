@@ -158,7 +158,9 @@ impl AudioConfig {
             max_duration_ms: parse(&map, "OUTLOUD_MAX_MS", d.max_duration_ms),
             partial_interval_ms: parse(&map, "OUTLOUD_PARTIAL_MS", d.partial_interval_ms),
             window_ms: parse(&map, "OUTLOUD_WINDOW_MS", d.window_ms),
-            device_name: map.get("OUTLOUD_MIC_DEVICE").cloned(),
+            device_name: map
+                .get("OUTLOUD_MIC_DEVICE")
+                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) }),
         }
     }
 

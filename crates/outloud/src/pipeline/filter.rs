@@ -1,5 +1,5 @@
 use crate::audio::AudioEvent;
-use crate::protocol::{Event, State};
+use crate::protocol::{Event, State, StatusTracker};
 use streamsafe::{FilterTransform, Result};
 
 /// Data extracted from an utterance, passed downstream for transcription.
@@ -20,11 +20,12 @@ pub struct UtteranceData {
 /// to the event channel and passes only utterances through the pipeline.
 pub struct VadFilter {
     event_tx: tokio::sync::mpsc::Sender<Event>,
+    tracker: StatusTracker,
 }
 
 impl VadFilter {
-    pub fn new(event_tx: tokio::sync::mpsc::Sender<Event>) -> Self {
-        Self { event_tx }
+    pub fn new(event_tx: tokio::sync::mpsc::Sender<Event>, tracker: StatusTracker) -> Self {
+        Self { event_tx, tracker }
     }
 }
 
@@ -60,10 +61,7 @@ impl FilterTransform for VadFilter {
             } => {
                 let _ = self
                     .event_tx
-                    .send(Event::Status {
-                        state: State::Transcribing,
-                        device: None,
-                    })
+                    .send(self.tracker.transition(State::Transcribing, None))
                     .await;
                 Ok(Some(UtteranceData {
                     samples,
@@ -95,7 +93,7 @@ mod tests {
     fn make_filter() -> VadFilter {
         let (_event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
         let _ = event_rx; // suppress unused warning
-        VadFilter::new(_event_tx)
+        VadFilter::new(_event_tx, StatusTracker::new())
     }
 
     #[tokio::test]

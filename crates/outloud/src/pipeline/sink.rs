@@ -1,26 +1,28 @@
-use crate::protocol::{Event, State};
+use crate::protocol::{Event, State, StatusTracker};
 use streamsafe::{Result, Sink, StreamSafeError};
 
 /// Terminal pipeline stage that sends transcript events to the unified
 /// event channel, then emits an Idle status.
 pub struct EventSink {
     event_tx: tokio::sync::mpsc::Sender<Event>,
+    tracker: StatusTracker,
 }
 
 impl EventSink {
-    pub fn new(event_tx: tokio::sync::mpsc::Sender<Event>) -> Self {
-        Self { event_tx }
+    pub fn new(event_tx: tokio::sync::mpsc::Sender<Event>, tracker: StatusTracker) -> Self {
+        Self { event_tx, tracker }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::BackendHealth;
 
     #[tokio::test]
     async fn sink_sends_non_partial_then_idle() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<Event>(16);
-        let mut sink = EventSink::new(event_tx);
+        let mut sink = EventSink::new(event_tx, StatusTracker::new());
 
         sink.consume(Event::Transcript {
             text: "hello".into(),
@@ -34,13 +36,23 @@ mod tests {
         let event2 = event_rx.try_recv().unwrap();
 
         assert!(matches!(event1, Event::Transcript { .. }));
-        assert!(matches!(event2, Event::Status { state: State::Idle, device: None }));
+        assert!(matches!(
+            event2,
+            Event::Status {
+                state: State::Idle,
+                device: None,
+                backend: BackendHealth {
+                    status: ref _s,
+                    error: None
+                },
+            }
+        ));
     }
 
     #[tokio::test]
     async fn sink_sends_partial_without_idle() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<Event>(16);
-        let mut sink = EventSink::new(event_tx);
+        let mut sink = EventSink::new(event_tx, StatusTracker::new());
 
         sink.consume(Event::Partial {
             text: "interim".into(),
@@ -62,7 +74,7 @@ mod tests {
     #[tokio::test]
     async fn sink_sends_error_then_idle() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<Event>(16);
-        let mut sink = EventSink::new(event_tx);
+        let mut sink = EventSink::new(event_tx, StatusTracker::new());
 
         sink.consume(Event::Error {
             message: "something broke".into(),
@@ -74,13 +86,20 @@ mod tests {
         let event2 = event_rx.try_recv().unwrap();
 
         assert!(matches!(event1, Event::Error { .. }));
-        assert!(matches!(event2, Event::Status { state: State::Idle, device: None }));
+        assert!(matches!(
+            event2,
+            Event::Status {
+                state: State::Idle,
+                device: None,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
     async fn sink_channel_closed_returns_err() {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(1);
-        let mut sink = EventSink::new(event_tx);
+        let mut sink = EventSink::new(event_tx, StatusTracker::new());
 
         // Drop the receiver to close the channel
         drop(event_rx);
@@ -110,7 +129,7 @@ impl Sink for EventSink {
             .map_err(|_| StreamSafeError::ChannelClosed)?;
         if !is_partial {
             self.event_tx
-                .send(Event::Status { state: State::Idle, device: None })
+                .send(self.tracker.transition(State::Idle, None))
                 .await
                 .map_err(|_| StreamSafeError::ChannelClosed)?;
         }

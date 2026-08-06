@@ -4,7 +4,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use outloud::audio::{AudioCapture, AudioConfig};
 use outloud::pipeline::{AudioSource, EventSink, TranscribeTransform, VadFilter};
-use outloud::protocol::{Event, State, parse_command, serialize_event};
+use outloud::protocol::{
+    BackendHealth, Event, State, StatusTracker, parse_command, serialize_event,
+};
 use outloud::transcribe::SpeechTranscriber;
 use streamsafe::PipelineBuilder;
 use tokio_util::sync::CancellationToken;
@@ -69,6 +71,7 @@ async fn stdin_command_loop(
     audio: Arc<AudioCapture>,
     event_tx: tokio::sync::mpsc::Sender<Event>,
     token: CancellationToken,
+    tracker: StatusTracker,
 ) {
     let _ = tokio::task::spawn_blocking(move || {
         let stdin = io::stdin().lock();
@@ -90,25 +93,24 @@ async fn stdin_command_loop(
                         match audio.start(device.as_deref()) {
                             Ok(()) => {
                                 let active = audio.device_name();
-                                let _ = event_tx.blocking_send(Event::Status {
-                                    state: State::Listening,
-                                    device: active,
-                                });
+                                let _ = event_tx
+                                    .blocking_send(tracker.transition(State::Listening, active));
                             }
                             Err(e) => {
                                 let _ = event_tx.blocking_send(Event::Error {
                                     message: format!("failed to start capture: {e}"),
                                 });
+                                // Back to Idle; the tracker keeps the last-known
+                                // backend health rather than inventing one.
+                                let _ =
+                                    event_tx.blocking_send(tracker.transition(State::Idle, None));
                             }
                         }
                     }
                     outloud::protocol::Command::StopListening
                     | outloud::protocol::Command::Cancel => {
                         audio.stop();
-                        let _ = event_tx.blocking_send(Event::Status {
-                            state: State::Idle,
-                            device: None,
-                        });
+                        let _ = event_tx.blocking_send(tracker.transition(State::Idle, None));
                     }
                     outloud::protocol::Command::ListDevices => {
                         match AudioCapture::list_devices() {
@@ -168,23 +170,43 @@ async fn main() -> Result<()> {
     // Unified event channel — all events flow through here to stdout.
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(64);
 
-    // Initial status.
-    let _ = event_tx.send(Event::Status {
-        state: State::Idle,
-        device: None,
-    })
-    .await;
+    // Shared status snapshot. Every Status event flows through the tracker so
+    // heartbeats, command responses, and pipeline events never contradict
+    // each other's state/device/backend fields.
+    let tracker = StatusTracker::new();
 
-    // Transcription backend.
+    // 1. Daemon alive, backend not yet probed.
+    let _ = event_tx
+        .send(tracker.health_update(BackendHealth::pending()))
+        .await;
+
+    // Transcription backend — probe immediately.
     let transcriber: Arc<dyn SpeechTranscriber> = Arc::from(build_transcriber()?);
     let stt_available = transcriber.is_ready();
     let backend_name = transcriber.name().to_string();
+    let backend_url = std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| {
+        if backend_name == "whisper" {
+            "http://127.0.0.1:8000".into()
+        } else {
+            "http://127.0.0.1:8674".into()
+        }
+    });
+
+    // 2. Emit the first health result immediately.
     if stt_available {
         tracing::info!("STT backend ready ({backend_name})");
+        let _ = event_tx
+            .send(tracker.health_update(BackendHealth::healthy()))
+            .await;
     } else {
         tracing::warn!(
             "STT backend not ready ({backend_name}) — will emit placeholder transcripts"
         );
+        let _ = event_tx
+            .send(tracker.health_update(BackendHealth::unhealthy(format!(
+                "{backend_name} at {backend_url} is unreachable"
+            ))))
+            .await;
     }
 
     // Audio capture — no stream opened yet. The pipeline reads from the shared
@@ -203,14 +225,17 @@ async fn main() -> Result<()> {
         audio.clone(),
         event_tx.clone(),
         token.clone(),
+        tracker.clone(),
     ));
 
     // Periodic STT health heartbeat — pings the server every 5s and emits
-    // an stt_health event so the UI can turn the signal light red.
+    // Status with the probed backend health. State/device come from the
+    // tracker, so a live recording is never clobbered by a stale Idle.
     let heartbeat_handle = tokio::spawn({
         let transcriber = transcriber.clone();
         let event_tx = event_tx.clone();
         let token = token.clone();
+        let tracker = tracker.clone();
         async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
             loop {
@@ -219,7 +244,12 @@ async fn main() -> Result<()> {
                     break;
                 }
                 let healthy = transcriber.is_ready();
-                let _ = event_tx.send(Event::SttHealth { healthy }).await;
+                let backend = if healthy {
+                    BackendHealth::healthy()
+                } else {
+                    BackendHealth::unhealthy("STT server unreachable")
+                };
+                let _ = event_tx.send(tracker.health_update(backend)).await;
             }
         }
     });
@@ -227,12 +257,9 @@ async fn main() -> Result<()> {
     // Build and run the pipeline. The pipeline is built once and reads from the
     // shared audio event channel. Start/stop commands control the cpal stream.
     let pipeline_result = PipelineBuilder::from(AudioSource::new(sync_rx))
-        .filter_pipe(VadFilter::new(event_tx.clone()))
-        .pipe(TranscribeTransform::new(
-            transcriber,
-            stt_available,
-        ))
-        .into(EventSink::new(event_tx))
+        .filter_pipe(VadFilter::new(event_tx.clone(), tracker.clone()))
+        .pipe(TranscribeTransform::new(transcriber, stt_available))
+        .into(EventSink::new(event_tx, tracker))
         .run_with_token(token)
         .await;
 

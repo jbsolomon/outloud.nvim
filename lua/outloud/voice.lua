@@ -37,15 +37,13 @@ function Voice:_handle_line(line)
 	elseif event_type == "partial" and self.callbacks.partial then
 		self.callbacks.partial(data.text, data.window_start_ms, data.window_end_ms, data.seq)
 	elseif event_type == "status" and self.callbacks.status then
-		self.callbacks.status(data.state, data.device)
+		self.callbacks.status(data.state, data.device, data.backend)
 	elseif event_type == "vad" and self.callbacks.vad then
 		self.callbacks.vad(data.speaking)
 	elseif event_type == "error" and self.callbacks.error then
 		self.callbacks.error(data.message)
 	elseif event_type == "devices" and self.callbacks.devices then
 		self.callbacks.devices(data.devices, data.default)
-	elseif event_type == "stt_health" and self.callbacks.stt_health then
-		self.callbacks.stt_health(data.healthy)
 	end
 end
 
@@ -144,7 +142,7 @@ function Voice:on_partial(callback)
 	self.callbacks.partial = callback
 end
 
----@param callback fun(state: string, device: string?)
+---@param callback fun(state: string, device: string?, backend: {status: string, error?: string})
 function Voice:on_status(callback)
 	self.callbacks.status = callback
 end
@@ -162,11 +160,6 @@ end
 ---@param callback fun(devices: table[], default_device: string?)
 function Voice:on_devices(callback)
 	self.callbacks.devices = callback
-end
-
----@param callback fun(healthy: boolean)
-function Voice:on_stt_health(callback)
-	self.callbacks.stt_health = callback
 end
 
 --- Called when the daemon process exits for any reason (expected or not).

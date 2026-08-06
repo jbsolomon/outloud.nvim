@@ -90,6 +90,14 @@ M._state = "inactive"
 ---@type boolean
 M._listening = false
 
+---@type boolean true after start_listening is sent until the daemon confirms
+--- (or the start is cancelled/fails). Prevents a fast second toggle from
+--- sending a duplicate start instead of a stop.
+M._start_pending = false
+
+---@type string? last backend health the daemon reported ("pending"|"healthy"|"unhealthy")
+M._backend_status = nil
+
 ---@type string?
 M._active_device = nil
 
@@ -150,6 +158,7 @@ function M.setup(opts)
 		if M._voice and M._voice:is_running() then
 			M._voice:cancel()
 			M._listening = false
+			M._start_pending = false
 		end
 	end, { desc = "outloud: cancel" })
 
@@ -173,9 +182,16 @@ function M.setup(opts)
 		if M._listening then
 			M._voice:stop_listening()
 			M._listening = false
+		elseif M._start_pending then
+			-- Start sent but not yet confirmed by the daemon: treat a second
+			-- press as cancelling the pending start rather than starting twice.
+			M._voice:stop_listening()
+			M._start_pending = false
 		else
 			M._voice:start_listening(M.config.audio.device)
-			M._listening = true
+			-- Don't set _listening = true optimistically; wait for the
+			-- daemon's "status: listening" event to confirm.
+			M._start_pending = true
 		end
 	end, { desc = "outloud: toggle recording" })
 end
@@ -188,7 +204,7 @@ end
 local function build_daemon_env(backend, model, audio)
 	local default_port = (backend == "whisper") and install.WHISPER_DEFAULT_PORT or install.DEFAULT_PORT
 	local url = model.server_url or ("http://127.0.0.1:" .. (model.server_port or default_port))
-	return {
+	local env = {
 		OUTLOUD_STT_BACKEND = backend,
 		OUTLOUD_STT_URL = url,
 		OUTLOUD_VAD_THRESHOLD = tostring(audio.vad_threshold),
@@ -196,8 +212,11 @@ local function build_daemon_env(backend, model, audio)
 		OUTLOUD_MAX_MS = tostring(audio.max_duration_ms),
 		OUTLOUD_PARTIAL_MS = tostring(audio.partial_interval_ms),
 		OUTLOUD_WINDOW_MS = tostring(audio.window_ms),
-		OUTLOUD_MIC_DEVICE = audio.device or "",
 	}
+	if audio.device and audio.device ~= "" then
+		env.OUTLOUD_MIC_DEVICE = audio.device
+	end
+	return env
 end
 
 --- Probe an external STT server to see if it's online.
@@ -458,36 +477,62 @@ function M._start_pipeline()
 		end
 	end)
 
-	M._voice:on_status(function(state, device)
+	M._voice:on_status(function(state, device, backend)
 		M._state = state
 		M._active_device = device
 		ui.set_state(state)
 		ui.set_device(device)
+		if state == "listening" and M._start_pending then
+			-- Daemon confirmed the start we requested. Stale "listening"
+			-- re-emits (e.g. a heartbeat that was in flight before a stop)
+			-- have _start_pending == false and can't resurrect the flag.
+			M._listening = true
+			M._start_pending = false
+		end
 		vim.schedule(function()
 			local sb = M._ensure_sidebar()
+
+			-- Backend health transitions. Every daemon status carries a
+			-- (state, device, backend) snapshot; only log an error entry on
+			-- the transition into "unhealthy" so the 5s heartbeat doesn't
+			-- spam the conversation while the server is down.
+			local prev_backend = M._backend_status
+			if backend and backend.status then
+				M._backend_status = backend.status
+			end
+
+			if backend and backend.status == "pending" then
+				-- Daemon alive, waiting for STT probe
+				sb:set_state("initializing")
+			elseif backend and backend.status == "healthy" then
+				sb:set_status("stt", "up")
+				if state == "idle" then
+					sb:set_state("stt_ready")
+				end
+			elseif backend and backend.status == "unhealthy" then
+				sb:set_status("stt", "error")
+				if backend.error and prev_backend ~= "unhealthy" then
+					sb:add_error("STT: " .. backend.error)
+				end
+				sb:set_state("stt_unavailable")
+			end
+
 			if state == "listening" then
 				sb:set_state("listening")
 				sb:set_device(device)
 			elseif state == "transcribing" then
 				sb:set_state("transcribing")
 				sb:set_device(device)
-			elseif state == "idle" then
-				-- After "initializing", daemon alive → "audio input ready"
-				-- After recording, back to the appropriate ready state
-				local current = sb.state
-				if current == "initializing" then
-					sb:set_state("audio_ready")
-				elseif current == "stt_ready" then
-					-- stay stt_ready
-				elseif current == "stt_unavailable" then
-					-- stay stt_unavailable
-				end
 			end
+			-- state == "idle": keep whatever the backend health chose above
+			-- (initializing / stt_ready / stt_unavailable).
 		end)
 	end)
 
 	M._voice:on_error(function(message)
 		vim.schedule(function()
+			M._listening = false
+			M._start_pending = false
 			vim.notify("[outloud] daemon error: " .. message, vim.log.levels.ERROR)
 			local sb = M._ensure_sidebar()
 			sb:set_status("daemon", "error")
@@ -509,29 +554,12 @@ function M._start_pipeline()
 		end)
 	end)
 
-	M._voice:on_stt_health(function(healthy)
-		vim.schedule(function()
-			local sb = M._ensure_sidebar()
-			sb:set_status("stt", healthy and "up" or "error")
-			if healthy then
-				-- STT came back (or confirmed) healthy
-				if sb.state == "audio_ready" or sb.state == "stt_unavailable" then
-					sb:set_state("stt_ready")
-				end
-			else
-				-- STT went down
-				if sb.state == "stt_ready" or sb.state == "audio_ready" then
-					sb:set_state("stt_unavailable")
-				end
-			end
-		end)
-	end)
-
 	-- Daemon process death (crash, device loss, external kill): reflect it in
 	-- the UI instead of leaving stale "listening"/"up" state behind.
 	M._voice:on_exit(function(code)
 		vim.schedule(function()
 			M._listening = false
+			M._start_pending = false
 			if M._sidebar then
 				M._sidebar:set_status("daemon", "down")
 				if code ~= 0 then
@@ -581,6 +609,8 @@ function M.stop()
 	M._state = "inactive"
 	ui.set_state("inactive")
 	M._listening = false
+	M._start_pending = false
+	M._backend_status = nil
 end
 
 ---@return string

@@ -176,8 +176,8 @@ end)
 test_voice:on_partial(function(text)
   table.insert(events, { type = "partial", text = text })
 end)
-test_voice:on_status(function(state)
-  table.insert(events, { type = "status", state = state })
+test_voice:on_status(function(state, device, backend)
+  table.insert(events, { type = "status", state = state, device = device, backend = backend })
 end)
 test_voice:on_vad(function(speaking)
   table.insert(events, { type = "vad", speaking = speaking })
@@ -185,10 +185,6 @@ end)
 test_voice:on_error(function(message)
   table.insert(events, { type = "error", message = message })
 end)
-test_voice:on_stt_health(function(healthy)
-  table.insert(events, { type = "stt_health", healthy = healthy })
-end)
-
 -- Simulate a status event (listening)
 test_voice:_handle_line(vim.json.encode({ type = "status", state = "listening" }))
 assert_eq(#events, 1, "one event after status")
@@ -234,16 +230,21 @@ assert_eq(#events, 7, "invalid JSON ignored, still seven events")
 test_voice:_handle_line("")
 assert_eq(#events, 7, "empty line ignored, still seven events")
 
--- Simulate stt_health events
-test_voice:_handle_line(vim.json.encode({ type = "stt_health", healthy = true }))
-assert_eq(#events, 8, "eight events after stt_health")
-assert_eq(events[8].type, "stt_health", "stt_health event type")
-assert_eq(events[8].healthy, true, "stt_health is true")
+-- Simulate status events carrying backend health snapshots
+test_voice:_handle_line(vim.json.encode({ type = "status", state = "idle", backend = { status = "healthy" } }))
+assert_eq(#events, 8, "eight events after backend status")
+assert_eq(events[8].type, "status", "backend status event type")
+assert_eq(events[8].backend.status, "healthy", "backend status is healthy")
+assert_eq(events[8].backend.error, nil, "healthy backend has no error")
 
-test_voice:_handle_line(vim.json.encode({ type = "stt_health", healthy = false }))
-assert_eq(#events, 9, "nine events after stt_health false")
-assert_eq(events[9].type, "stt_health", "stt_health event type")
-assert_eq(events[9].healthy, false, "stt_health is false")
+test_voice:_handle_line(vim.json.encode({
+  type = "status",
+  state = "idle",
+  backend = { status = "unhealthy", error = "whisper at http://127.0.0.1:8000 is unreachable" },
+}))
+assert_eq(#events, 9, "nine events after unhealthy status")
+assert_eq(events[9].backend.status, "unhealthy", "backend status is unhealthy")
+assert_eq(events[9].backend.error, "whisper at http://127.0.0.1:8000 is unreachable", "backend error carried")
 
 -- ============================================================================
 -- Test 5: Sidebar - Construction & State Management
@@ -274,9 +275,6 @@ assert_eq(sidebar.state, "ready", "state changed to 'ready'")
 
 sidebar:set_state("initializing")
 assert_eq(sidebar.state, "initializing", "state changed to 'initializing'")
-
-sidebar:set_state("audio_ready")
-assert_eq(sidebar.state, "audio_ready", "state changed to 'audio_ready'")
 
 sidebar:set_state("stt_ready")
 assert_eq(sidebar.state, "stt_ready", "state changed to 'stt_ready'")
@@ -311,18 +309,14 @@ local sb_flow = Sidebar:new({
   keys = { push_to_talk = "<leader>ls", cancel = "<leader>lc", sidebar = "<leader>ll" },
 })
 
--- Simulate the three-phase startup flow
+-- Simulate the startup flow: daemon alive (probe pending) → STT healthy
 sb_flow:set_state("initializing")
 assert_eq(sb_flow.state, "initializing", "phase 1: initializing")
 
--- Daemon Status{Idle} arrives → audio input ready
-sb_flow:set_state("audio_ready")
-assert_eq(sb_flow.state, "audio_ready", "phase 2: audio input ready")
-
--- Heartbeat confirms STT healthy → stt ready
+-- Daemon status with backend health confirms STT healthy → stt ready
 sb_flow:set_status("stt", "up")
 sb_flow:set_state("stt_ready")
-assert_eq(sb_flow.state, "stt_ready", "phase 3: stt ready")
+assert_eq(sb_flow.state, "stt_ready", "phase 2: stt ready")
 assert_eq(sb_flow.status.stt, "up", "stt signal is up")
 
 -- Heartbeat detects STT down → stt unavailable

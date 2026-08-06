@@ -1,5 +1,7 @@
 //! JSON lines protocol for communicating with the Neovim plugin.
 
+use std::sync::{Arc, Mutex};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -21,6 +23,100 @@ pub enum Command {
     ListDevices,
 }
 
+/// Backend liveness — always serialized as an object with `status`
+/// ("pending", "healthy", or "unhealthy") and optional `error`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendHealth {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl BackendHealth {
+    pub fn pending() -> Self {
+        Self {
+            status: "pending".into(),
+            error: None,
+        }
+    }
+    pub fn healthy() -> Self {
+        Self {
+            status: "healthy".into(),
+            error: None,
+        }
+    }
+    pub fn unhealthy(error: impl Into<String>) -> Self {
+        Self {
+            status: "unhealthy".into(),
+            error: Some(error.into()),
+        }
+    }
+}
+
+/// Tracks the last status the daemon emitted so that every `Event::Status`
+/// carries a consistent `(state, device, backend)` snapshot.
+///
+/// State/device transitions go through [`StatusTracker::transition`], which
+/// attaches the last-known backend health; health probes go through
+/// [`StatusTracker::health_update`], which attaches the current state/device.
+/// Without this, the periodic health heartbeat would have to invent a state
+/// (clobbering a live recording) and pipeline events would have to invent a
+/// health value (masking a dead STT server).
+#[derive(Debug, Clone)]
+pub struct StatusTracker {
+    inner: Arc<Mutex<StatusSnapshot>>,
+}
+
+#[derive(Debug)]
+struct StatusSnapshot {
+    state: State,
+    device: Option<String>,
+    backend: BackendHealth,
+}
+
+impl StatusTracker {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(StatusSnapshot {
+                state: State::Idle,
+                device: None,
+                backend: BackendHealth::pending(),
+            })),
+        }
+    }
+
+    /// Record a state/device transition and build the status event to emit,
+    /// carrying the last-known backend health.
+    pub fn transition(&self, state: State, device: Option<String>) -> Event {
+        let mut guard = self.inner.lock().unwrap();
+        guard.state = state;
+        guard.device = device;
+        Self::snapshot_event(&guard)
+    }
+
+    /// Record a backend health probe result and build the status event to
+    /// emit, carrying the current state/device.
+    pub fn health_update(&self, backend: BackendHealth) -> Event {
+        let mut guard = self.inner.lock().unwrap();
+        guard.backend = backend;
+        Self::snapshot_event(&guard)
+    }
+
+    fn snapshot_event(snapshot: &StatusSnapshot) -> Event {
+        Event::Status {
+            state: snapshot.state,
+            device: snapshot.device.clone(),
+            backend: snapshot.backend.clone(),
+        }
+    }
+}
+
+impl Default for StatusTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum Event {
@@ -28,6 +124,7 @@ pub enum Event {
     Status {
         state: State,
         device: Option<String>,
+        backend: BackendHealth,
     },
     #[serde(rename = "vad")]
     Vad { speaking: bool },
@@ -50,9 +147,6 @@ pub enum Event {
         devices: Vec<DeviceInfo>,
         default: Option<String>,
     },
-    /// STT backend liveness check result, emitted periodically.
-    #[serde(rename = "stt_health")]
-    SttHealth { healthy: bool },
 }
 
 /// Information about an available input device.
@@ -178,11 +272,12 @@ mod tests {
         let line = serialize_event(&Event::Status {
             state: State::Listening,
             device: Some("Blue Yeti".to_string()),
+            backend: BackendHealth::healthy(),
         })
         .unwrap();
         assert_eq!(
             line,
-            r#"{"type":"status","state":"listening","device":"Blue Yeti"}"#
+            r#"{"type":"status","state":"listening","device":"Blue Yeti","backend":{"status":"healthy"}}"#
         );
     }
 
@@ -191,9 +286,54 @@ mod tests {
         let line = serialize_event(&Event::Status {
             state: State::Idle,
             device: None,
+            backend: BackendHealth::pending(),
         })
         .unwrap();
-        assert_eq!(line, r#"{"type":"status","state":"idle","device":null}"#);
+        assert_eq!(
+            line,
+            r#"{"type":"status","state":"idle","device":null,"backend":{"status":"pending"}}"#
+        );
+    }
+
+    #[test]
+    fn status_tracker_transition_keeps_last_known_backend() {
+        let tracker = StatusTracker::new();
+        let _ = tracker.health_update(BackendHealth::unhealthy("down"));
+        let event = tracker.transition(State::Listening, Some("mic".into()));
+        match event {
+            Event::Status {
+                state,
+                device,
+                backend,
+            } => {
+                assert!(matches!(state, State::Listening));
+                assert_eq!(device.as_deref(), Some("mic"));
+                assert_eq!(backend.status, "unhealthy");
+                assert_eq!(backend.error.as_deref(), Some("down"));
+            }
+            _ => panic!("expected status event"),
+        }
+    }
+
+    #[test]
+    fn status_tracker_health_update_keeps_current_state() {
+        let tracker = StatusTracker::new();
+        let _ = tracker.transition(State::Listening, Some("mic".into()));
+        let event = tracker.health_update(BackendHealth::healthy());
+        match event {
+            Event::Status {
+                state,
+                device,
+                backend,
+            } => {
+                // A heartbeat must never clobber a live recording with Idle.
+                assert!(matches!(state, State::Listening));
+                assert_eq!(device.as_deref(), Some("mic"));
+                assert_eq!(backend.status, "healthy");
+                assert!(backend.error.is_none());
+            }
+            _ => panic!("expected status event"),
+        }
     }
 
     #[test]

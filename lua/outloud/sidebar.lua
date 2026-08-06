@@ -86,7 +86,6 @@ local STATE_LABEL = {
 	loading_model = "loading model...",
 	starting_daemon = "starting daemon...",
 	initializing = "initializing...",
-	audio_ready = "audio input ready",
 	stt_ready = "stt ready — press to record",
 	stt_unavailable = "STT backend unavailable",
 	ready = "press to record",
