@@ -712,21 +712,39 @@ function Sidebar:is_open()
 	return self.win ~= nil and not self.win.closed
 end
 
+--- Geometry (row, col, width, height) of a window in editor-grid cells.
+--- nvim_win_get_config only reports row/col for floating windows; for
+--- normal windows use nvim_win_get_position (0-indexed screen cells).
+---@param win integer window handle
+---@return integer row, integer col, integer width, integer height
+local function window_geometry(win)
+	local wc = vim.api.nvim_win_get_config(win)
+	if wc.relative ~= "" then
+		return wc.row, wc.col, wc.width, wc.height
+	end
+	local pos = vim.api.nvim_win_get_position(win)
+	return pos[1], pos[2], vim.api.nvim_win_get_width(win), vim.api.nvim_win_get_height(win)
+end
+
 --- Reposition the sidebar to stay aligned with the current window.
 local function reposition_sidebar(sidebar)
 	if not sidebar:is_open() then
 		return
 	end
 	local win = vim.api.nvim_get_current_win()
-	local wc = vim.api.nvim_win_get_config(win)
+	if win == sidebar.win.win then
+		return -- don't reposition relative to ourselves
+	end
+	local row, col, width, height = window_geometry(win)
 	local side = sidebar.opts.position == "left" and "left" or "right"
-	local col = side == "right"
-		and (wc.col + wc.width - sidebar.opts.width)
-		or wc.col
+	local target_col = side == "right"
+		and (col + width - sidebar.opts.width)
+		or col
 	vim.api.nvim_win_set_config(sidebar.win.win, {
-		row = wc.row,
-		col = col,
-		height = wc.height,
+		relative = "editor",
+		row = row,
+		col = target_col,
+		height = height,
 	})
 end
 
@@ -747,24 +765,8 @@ function Sidebar:open(focus)
 	-- Position relative to the current window, not the full editor.
 	-- This keeps the sidebar visible when vertical splits (e.g., CodeCompanion) are open.
 	local win = vim.api.nvim_get_current_win()
-	local wc = vim.api.nvim_win_get_config(win)
+	local win_row, win_col, win_width, win_height = window_geometry(win)
 	local side = self.opts.position == "left" and "left" or "right"
-
-	-- nvim_win_get_config only returns col/row/width/height for floating windows.
-	-- For regular (non-float) windows, fall back to screen position + geometry.
-	local win_col, win_row, win_width, win_height
-	if wc.col == nil then
-		local pos = vim.fn.win_screen_pos(win, 0)
-		win_col = pos[2] - 1 -- 1-indexed → 0-indexed
-		win_row = pos[1] - 1
-		win_width = vim.api.nvim_win_get_width(win)
-		win_height = vim.api.nvim_win_get_height(win)
-	else
-		win_col = wc.col
-		win_row = wc.row
-		win_width = wc.width
-		win_height = wc.height
-	end
 
 	local col = side == "right"
 		and (win_col + win_width - self.opts.width)
@@ -800,10 +802,11 @@ function Sidebar:open(focus)
 	self:_render_all()
 
 	-- Re-flow content and reposition when the window is resized.
+	-- WinResized/VimResized are not buffer-local events; use a global
+	-- autocmd and guard on the sidebar being open.
 	self._augroup = vim.api.nvim_create_augroup("outloud_sidebar", { clear = true })
-	vim.api.nvim_create_autocmd("WinResized", {
+	vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
 		group = self._augroup,
-		buffer = self.buf,
 		desc = "outloud: re-flow sidebar on resize",
 		callback = function()
 			if self:is_open() then
