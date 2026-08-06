@@ -34,9 +34,10 @@ local function cargo_version()
 		return nil
 	end
 	for line in io.lines(toml_path) do
-		local v = line:match("^version%s*=%s*%[(.+)%]")
+		-- Cargo versions are quoted strings: version = "0.6.0"
+		local v = line:match('^version%s*=%s*"([^"]+)"')
 		if v then
-			return v:match("%s*(.-)%s*")
+			return v
 		end
 	end
 	return nil
@@ -48,8 +49,13 @@ local function daemon_version()
 	if vim.fn.executable("outloud") ~= 1 then
 		return nil
 	end
-	local ok, res = pcall(vim.system, { "outloud", "--version" }, { text = true })
-	if ok and res and res.code == 0 then
+	-- vim.system is async; wait for --version to complete (fast in practice).
+	local ok, obj = pcall(vim.system, { "outloud", "--version" }, { text = true })
+	if not ok or not obj then
+		return nil
+	end
+	local res = obj:wait(5000)
+	if res and res.code == 0 and res.stdout then
 		return (res.stdout:gsub("%s+", ""))
 	end
 	return nil
@@ -200,12 +206,29 @@ function M.start_llama_server(opts, on_ready)
 	local on_phase = opts.on_phase or function() end
 	local stall_ms = opts.stall_timeout_ms or DEFAULT_STALL_MS
 
-	-- Already managed by us
-	if M._llama_job_id then
-		if on_ready then
+	-- Already managed, or a start is in flight (probe/download window).
+	if M._llama_job_id or M._llama_starting then
+		if M._llama_job_id and on_ready then
 			on_ready()
 		end
 		return
+	end
+	M._llama_starting = true
+
+	-- Clear the in-flight flag on any terminal outcome (ready or error).
+	local raw_phase = on_phase
+	on_phase = function(phase, detail)
+		if phase == "error" then
+			M._llama_starting = false
+		end
+		raw_phase(phase, detail)
+	end
+	if on_ready then
+		local raw_ready = on_ready
+		on_ready = function()
+			M._llama_starting = false
+			raw_ready()
+		end
 	end
 
 	-- Something else may already be listening on the port.
@@ -295,7 +318,12 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 			end
 		else
 			vim.notify("[outloud] " .. (message or "llama-server failed"), vim.log.levels.ERROR)
-			M._llama_job_id = nil
+			-- Kill the stalled/failed process before dropping the handle;
+			-- otherwise it is orphaned and stop_llama_server() can't reach it.
+			if M._llama_job_id then
+				pcall(vim.fn.jobstop, M._llama_job_id)
+				M._llama_job_id = nil
+			end
 			on_phase("error", message)
 		end
 	end
@@ -378,6 +406,7 @@ end
 
 --- Stop the managed llama-server process.
 function M.stop_llama_server()
+	M._llama_starting = false
 	if M._llama_job_id then
 		vim.fn.jobstop(M._llama_job_id)
 		M._llama_job_id = nil
@@ -475,12 +504,16 @@ local function download_whisper_server(on_done)
 		dest,
 		url,
 	}, {}, function(res)
-		if res.code == 0 then
-			vim.fn.execute("chmod +x " .. dest)
-			on_done(true)
-		else
-			on_done(false, "failed to download whisper-server (curl exit " .. res.code .. ")")
-		end
+		-- vim.system callbacks run in a fast-event context; on_done chains into
+		-- jobstart/API calls downstream, so it must leave the fast event first.
+		vim.schedule(function()
+			if res.code == 0 then
+				vim.fn.execute("chmod +x " .. dest)
+				on_done(true)
+			else
+				on_done(false, "failed to download whisper-server (curl exit " .. res.code .. ")")
+			end
+		end)
 	end)
 end
 
@@ -557,18 +590,20 @@ local function download_whisper_model(model_size, on_phase, on_done)
 		}, {}, function(res)
 			timer:stop()
 			timer:close()
-			if res.code == 0 and vim.fn.filereadable(dest) == 1 then
-				on_phase("loading")
-				on_done(true)
-			else
-				vim.schedule(function()
+			-- Fast-event context: filereadable/on_phase/on_done all touch the API
+			-- or spawn jobs downstream, so schedule the whole completion path.
+			vim.schedule(function()
+				if res.code == 0 and vim.fn.filereadable(dest) == 1 then
+					on_phase("loading")
+					on_done(true)
+				else
 					vim.notify(
 						"[outloud] model download failed (curl exit " .. res.code .. ")",
 						vim.log.levels.ERROR
 					)
-				end)
-				on_done(false, "failed to download model (curl exit " .. res.code .. ")")
-			end
+					on_done(false, "failed to download model (curl exit " .. res.code .. ")")
+				end
+			end)
 		end)
 	end)
 end
@@ -611,12 +646,29 @@ function M.start_whisper_server(opts, on_ready)
 	local on_phase = opts.on_phase or function() end
 	local stall_ms = opts.stall_timeout_ms or DEFAULT_STALL_MS
 
-	-- Already managed
-	if M._whisper_job_id then
-		if on_ready then
+	-- Already managed, or a start is in flight (probe/download window).
+	if M._whisper_job_id or M._whisper_starting then
+		if M._whisper_job_id and on_ready then
 			on_ready()
 		end
 		return
+	end
+	M._whisper_starting = true
+
+	-- Clear the in-flight flag on any terminal outcome (ready or error).
+	local raw_phase = on_phase
+	on_phase = function(phase, detail)
+		if phase == "error" then
+			M._whisper_starting = false
+		end
+		raw_phase(phase, detail)
+	end
+	if on_ready then
+		local raw_ready = on_ready
+		on_ready = function()
+			M._whisper_starting = false
+			raw_ready()
+		end
 	end
 
 	-- Check if something else is already listening
@@ -719,7 +771,12 @@ M._spawn_whisper_server = function(bin, model, port, on_phase, stall_ms, on_read
 			end
 		else
 			vim.notify("[outloud] " .. (message or "whisper-server failed"), vim.log.levels.ERROR)
-			M._whisper_job_id = nil
+			-- Kill the stalled/failed process before dropping the handle;
+			-- otherwise it is orphaned and stop_whisper_server() can't reach it.
+			if M._whisper_job_id then
+				pcall(vim.fn.jobstop, M._whisper_job_id)
+				M._whisper_job_id = nil
+			end
 			on_phase("error", message)
 		end
 	end
@@ -788,6 +845,7 @@ end
 
 --- Stop the managed whisper-server process.
 function M.stop_whisper_server()
+	M._whisper_starting = false
 	if M._whisper_job_id then
 		vim.fn.jobstop(M._whisper_job_id)
 		M._whisper_job_id = nil
@@ -797,5 +855,9 @@ end
 M.HF_REPO = HF_REPO
 M.DEFAULT_PORT = DEFAULT_PORT
 M.WHISPER_DEFAULT_PORT = WHISPER_DEFAULT_PORT
+
+-- Daemon build lifecycle (called from init.lua's M.start()).
+M.needs_rebuild = needs_rebuild
+M.build_daemon = build_daemon
 
 return M

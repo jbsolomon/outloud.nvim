@@ -93,8 +93,13 @@ function Voice:stop()
 	if not self.job_id then
 		return
 	end
+	local job_id = self.job_id
 	self:_send({ cmd = "shutdown" })
-	vim.fn.jobwait({ self.job_id }, 2000)
+	if vim.fn.jobwait({ job_id }, 2000)[1] == -1 then
+		-- Daemon ignored the shutdown command within 2s. jobwait only waits;
+		-- it never kills — jobstop it rather than orphaning the process.
+		pcall(vim.fn.jobstop, job_id)
+	end
 	self.job_id = nil
 end
 
@@ -162,6 +167,12 @@ end
 ---@param callback fun(healthy: boolean)
 function Voice:on_stt_health(callback)
 	self.callbacks.stt_health = callback
+end
+
+--- Called when the daemon process exits for any reason (expected or not).
+---@param callback fun(code: number)
+function Voice:on_exit(callback)
+	self.callbacks.exit = callback
 end
 
 ---@return boolean

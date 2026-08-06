@@ -144,11 +144,6 @@ function M.setup(opts)
 			sidebar:open(false)
 		end
 		sidebar:set_state("ready")
-
-	local function cleanup()
-		M._listening = false
-	end
-	-- No sidebar-local keymaps; recording toggled via global keys only
 	end, { desc = "outloud: open" })
 
 	vim.keymap.set("n", keys.cancel, function()
@@ -210,14 +205,14 @@ end
 ---@param cb fun(ok: boolean)
 local function probe_external_server(url, cb)
 	-- Extract host and port, determine health path from backend
-	local host, port = url:match("^https%-?://([^:/]+)(?::(%d+))?/?.*")
+	local scheme, host, port = url:match("^(https?)://([^:/]+)(?::(%d+))?")
 	if not host then
 		vim.schedule(function()
 			cb(false)
 		end)
 		return
 	end
-	port = tonumber(port) or 80
+	port = tonumber(port) or (scheme == "https" and 443 or 80)
 
 	-- Try the health endpoint first, then root
 	local health_paths = { "/health", "/" }
@@ -232,7 +227,7 @@ local function probe_external_server(url, cb)
 			return
 		end
 		local path = health_paths[idx]
-		local probe_url = string.format("http://%s:%d%s", host, port, path)
+		local probe_url = string.format("%s://%s:%d%s", scheme, host, port, path)
 
 		vim.system({
 			"curl",
@@ -257,11 +252,17 @@ local function probe_external_server(url, cb)
 	try_next()
 end
 
+--- Forward declaration: defined below (starts the STT server, then pipeline).
+local _start_with_server
+
 --- Start voice + UI, auto-launching the STT server if needed.
 function M.start()
-	if M._voice and M._voice:is_running() then
+	-- Re-entry guard: server startup is async, so is_running() stays false
+	-- for the whole probe/download/spawn window.
+	if M._starting or (M._voice and M._voice:is_running()) then
 		return
 	end
+	M._starting = true
 
 	local backend = M.config.backend or "whisper"
 
@@ -285,12 +286,14 @@ function M.start()
 		elseif phase == "ready" then
 			signal("stt", "up")
 		elseif phase == "error" then
+			M._starting = false
 			signal("stt", "error")
 			ui_state("inactive", detail)
 		end
 	end
 
 	local function on_server_ready()
+		M._starting = false
 		ui_state("initializing")
 		M._start_pipeline()
 	end
@@ -301,18 +304,19 @@ function M.start()
 		vim.notify("[outloud] daemon out of date, rebuilding...")
 		install.build_daemon(function(ok)
 			if not ok then
+				M._starting = false
 				ui_state("inactive", "daemon build failed")
 				return
 			end
 			_start_with_server(backend, ui_state, signal, on_server_phase, on_server_ready)
 		end)
 	else
-		M._start_with_server(backend, ui_state, signal, on_server_phase, on_server_ready)
+		_start_with_server(backend, ui_state, signal, on_server_phase, on_server_ready)
 	end
 end
 
 --- Internal: start the STT server and pipeline.
-local function _start_with_server(backend, ui_state, signal, on_server_phase, on_server_ready)
+_start_with_server = function(backend, ui_state, signal, on_server_phase, on_server_ready)
 	if not M.config.model.server_url then
 		signal("stt", "starting")
 		ui_state("starting_server")
@@ -336,6 +340,7 @@ local function _start_with_server(backend, ui_state, signal, on_server_phase, on
 		signal("stt", "starting")
 		ui_state("starting_server")
 		probe_external_server(M.config.model.server_url, function(ok)
+			M._starting = false
 			if ok then
 				signal("stt", "up")
 				ui_state("starting_daemon")
@@ -522,6 +527,26 @@ function M._start_pipeline()
 		end)
 	end)
 
+	-- Daemon process death (crash, device loss, external kill): reflect it in
+	-- the UI instead of leaving stale "listening"/"up" state behind.
+	M._voice:on_exit(function(code)
+		vim.schedule(function()
+			M._listening = false
+			if M._sidebar then
+				M._sidebar:set_status("daemon", "down")
+				if code ~= 0 then
+					M._sidebar:add_error(("daemon exited unexpectedly (code %d)"):format(code))
+				end
+			end
+			if code ~= 0 then
+				vim.notify(
+					("[outloud] daemon exited unexpectedly (code %d)"):format(code),
+					vim.log.levels.WARN
+				)
+			end
+		end)
+	end)
+
 	M._voice:start()
 	sidebar:set_status("daemon", M._voice:is_running() and "up" or "error")
 end
@@ -529,11 +554,12 @@ end
 --- Tear everything down: daemon, STT server, and UI. Also runs on
 --- VimLeavePre so quitting Neovim never strands a background process.
 function M.stop()
+	M._starting = false
 	if M._voice then
 		pcall(function()
 			M._voice:stop()
 		end)
-	M._voice = nil
+		M._voice = nil
 	end
 	local backend = M.config.backend or "whisper"
 	if backend == "whisper" then

@@ -1731,6 +1731,86 @@ assert_ok(plugin_content:find("OutloudScratchpad"), ":OutloudScratchpad command 
 assert_ok(plugin_content:find("toggle_scratchpad"), ":OutloudScratchpad calls toggle_scratchpad")
 
 -- ============================================================================
+-- Test 19: Daemon Lifecycle (start/stop/re-entry/exit)
+-- ============================================================================
+section("19. Daemon Lifecycle")
+
+local install_mod = require("outloud.install")
+local VoiceClass = require("outloud.voice").Voice
+
+-- Regression: needs_rebuild/build_daemon were file-local, so M.start()
+-- crashed with "attempt to call field 'needs_rebuild' (a nil value)".
+assert_type(install_mod.needs_rebuild, "function", "install.needs_rebuild is exported")
+assert_type(install_mod.build_daemon, "function", "install.build_daemon is exported")
+
+-- Regression: the exit callback existed in Voice but had no registration method.
+local vprobe = VoiceClass:new({ daemon_cmd = "outloud-nonexistent" })
+vprobe:on_exit(function() end)
+assert_type(vprobe.callbacks.exit, "function", "Voice:on_exit registers callbacks.exit")
+
+-- Regression: Voice:stop() orphaned a daemon that ignored the shutdown
+-- command — jobwait() only waits, it never kills.
+local jobstopped = nil
+local orig_jobstart = vim.fn.jobstart
+local orig_chansend = vim.fn.chansend
+local orig_jobwait = vim.fn.jobwait
+local orig_jobstop = vim.fn.jobstop
+vim.fn.jobstart = function() return 4242 end
+vim.fn.chansend = function() return 0 end
+vim.fn.jobwait = function() return { -1 } end -- -1 = timeout
+vim.fn.jobstop = function(id) jobstopped = id end
+
+local v2 = VoiceClass:new({ daemon_cmd = "outloud-nonexistent" })
+v2:start()
+assert_eq(v2:is_running(), true, "voice running after start (stubbed job)")
+v2:stop()
+assert_eq(jobstopped, 4242, "unresponsive daemon killed via jobstop after jobwait timeout")
+assert_eq(v2:is_running(), false, "voice not running after stop")
+
+-- Full start() flow: re-entry guard, async ready callback, clean stop.
+install_mod._whisper_job_id = nil -- defensive: no stale handles from earlier sections
+install_mod._llama_job_id = nil
+ls.stop() -- clean slate
+
+local orig_needs_rebuild = install_mod.needs_rebuild
+local orig_start_ws = install_mod.start_whisper_server
+install_mod.needs_rebuild = function() return false end
+local server_starts = 0
+install_mod.start_whisper_server = function(_, on_ready)
+	server_starts = server_starts + 1
+	vim.defer_fn(on_ready, 10)
+end
+vim.fn.jobwait = function() return { 0 } end -- clean shutdown on stop
+
+ls.setup({ ui = { sidebar_auto_open = false } })
+local start_ok, start_err = pcall(ls.start)
+assert_ok(start_ok, "start() runs without error", start_err)
+assert_eq(ls._starting, true, "starting flag set during async startup window")
+
+-- Re-entrant starts during the probe/spawn window must be ignored.
+ls.start()
+ls.start()
+
+local settled = vim.wait(1000, function()
+	return ls._starting == false
+end, 10)
+assert_ok(settled, "starting flag cleared once server reports ready")
+assert_eq(server_starts, 1, "STT server started exactly once (re-entry guard)")
+assert_ok(ls._voice ~= nil, "voice daemon created after server ready")
+
+ls.stop()
+assert_eq(ls._voice, nil, "voice cleared on stop")
+assert_eq(ls._starting, false, "starting flag cleared on stop")
+
+-- Restore all stubs.
+install_mod.needs_rebuild = orig_needs_rebuild
+install_mod.start_whisper_server = orig_start_ws
+vim.fn.jobstart = orig_jobstart
+vim.fn.chansend = orig_chansend
+vim.fn.jobwait = orig_jobwait
+vim.fn.jobstop = orig_jobstop
+
+-- ============================================================================
 -- Summary
 -- ============================================================================
 section("Results")
