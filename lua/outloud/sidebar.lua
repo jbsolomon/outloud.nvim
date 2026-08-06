@@ -749,17 +749,34 @@ function Sidebar:open(focus)
 	local win = vim.api.nvim_get_current_win()
 	local wc = vim.api.nvim_win_get_config(win)
 	local side = self.opts.position == "left" and "left" or "right"
+
+	-- nvim_win_get_config only returns col/row/width/height for floating windows.
+	-- For regular (non-float) windows, fall back to screen position + geometry.
+	local win_col, win_row, win_width, win_height
+	if wc.col == nil then
+		local pos = vim.fn.win_screen_pos(win, 0)
+		win_col = pos[2] - 1 -- 1-indexed → 0-indexed
+		win_row = pos[1] - 1
+		win_width = vim.api.nvim_win_get_width(win)
+		win_height = vim.api.nvim_win_get_height(win)
+	else
+		win_col = wc.col
+		win_row = wc.row
+		win_width = wc.width
+		win_height = wc.height
+	end
+
 	local col = side == "right"
-		and (wc.col + wc.width - self.opts.width)
-		or wc.col
+		and (win_col + win_width - self.opts.width)
+		or win_col
 
 	self.win = Snacks.win({
 		buf = self.buf,
 		position = "float",
-		row = wc.row,
+		row = win_row,
 		col = col,
 		width = self.opts.width,
-		height = wc.height,
+		height = win_height,
 		border = "none",
 		zindex = 40,
 		enter = false,
