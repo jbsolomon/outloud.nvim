@@ -185,6 +185,9 @@ end)
 test_voice:on_error(function(message)
   table.insert(events, { type = "error", message = message })
 end)
+test_voice:on_stt_health(function(healthy)
+  table.insert(events, { type = "stt_health", healthy = healthy })
+end)
 
 -- Simulate a status event (listening)
 test_voice:_handle_line(vim.json.encode({ type = "status", state = "listening" }))
@@ -227,9 +230,20 @@ assert_eq(#events, 7, "seven events after transcribing status")
 test_voice:_handle_line("not valid json {")
 assert_eq(#events, 7, "invalid JSON ignored, still seven events")
 
--- Test that empty lines are ignored
+--- Test that empty lines are ignored
 test_voice:_handle_line("")
 assert_eq(#events, 7, "empty line ignored, still seven events")
+
+-- Simulate stt_health events
+test_voice:_handle_line(vim.json.encode({ type = "stt_health", healthy = true }))
+assert_eq(#events, 8, "eight events after stt_health")
+assert_eq(events[8].type, "stt_health", "stt_health event type")
+assert_eq(events[8].healthy, true, "stt_health is true")
+
+test_voice:_handle_line(vim.json.encode({ type = "stt_health", healthy = false }))
+assert_eq(#events, 9, "nine events after stt_health false")
+assert_eq(events[9].type, "stt_health", "stt_health event type")
+assert_eq(events[9].healthy, false, "stt_health is false")
 
 -- ============================================================================
 -- Test 5: Sidebar - Construction & State Management
@@ -254,9 +268,21 @@ assert_eq(sidebar.status.stt, "down", "initial stt status is 'down'")
 assert_eq(sidebar.status.daemon, "down", "initial daemon status is 'down'")
 assert_eq(#sidebar.entries, 0, "initial entries is empty")
 
--- Test state transitions
+--- Test state transitions including new heartbeat-driven states
 sidebar:set_state("ready")
 assert_eq(sidebar.state, "ready", "state changed to 'ready'")
+
+sidebar:set_state("initializing")
+assert_eq(sidebar.state, "initializing", "state changed to 'initializing'")
+
+sidebar:set_state("audio_ready")
+assert_eq(sidebar.state, "audio_ready", "state changed to 'audio_ready'")
+
+sidebar:set_state("stt_ready")
+assert_eq(sidebar.state, "stt_ready", "state changed to 'stt_ready'")
+
+sidebar:set_state("stt_unavailable")
+assert_eq(sidebar.state, "stt_unavailable", "state changed to 'stt_unavailable'")
 
 sidebar:set_state("listening")
 assert_eq(sidebar.state, "listening", "state changed to 'listening'")
@@ -267,12 +293,51 @@ assert_eq(sidebar.state, "transcribing", "state changed to 'transcribing'")
 sidebar:set_state("idle")
 assert_eq(sidebar.state, "idle", "state changed to 'idle'")
 
--- Test status updates
+--- Test status updates
 sidebar:set_status("stt", "up")
 assert_eq(sidebar.status.stt, "up", "stt status changed to 'up'")
 
 sidebar:set_status("daemon", "up")
 assert_eq(sidebar.status.daemon, "up", "daemon status changed to 'up'")
+
+-- ============================================================================
+--- Test 5b: Sidebar - Heartbeat-Driven Startup Flow
+--- ============================================================================
+section("5b. Sidebar - Heartbeat Startup Flow")
+
+local sb_flow = Sidebar:new({
+  width = 48,
+  position = "right",
+  keys = { push_to_talk = "<leader>ls", cancel = "<leader>lc", sidebar = "<leader>ll" },
+})
+
+-- Simulate the three-phase startup flow
+sb_flow:set_state("initializing")
+assert_eq(sb_flow.state, "initializing", "phase 1: initializing")
+
+-- Daemon Status{Idle} arrives → audio input ready
+sb_flow:set_state("audio_ready")
+assert_eq(sb_flow.state, "audio_ready", "phase 2: audio input ready")
+
+-- Heartbeat confirms STT healthy → stt ready
+sb_flow:set_status("stt", "up")
+sb_flow:set_state("stt_ready")
+assert_eq(sb_flow.state, "stt_ready", "phase 3: stt ready")
+assert_eq(sb_flow.status.stt, "up", "stt signal is up")
+
+-- Heartbeat detects STT down → stt unavailable
+sb_flow:set_status("stt", "error")
+sb_flow:set_state("stt_unavailable")
+assert_eq(sb_flow.state, "stt_unavailable", "STT went down: stt unavailable")
+assert_eq(sb_flow.status.stt, "error", "stt signal is error")
+
+-- Heartbeat confirms STT back up → stt ready
+sb_flow:set_status("stt", "up")
+sb_flow:set_state("stt_ready")
+assert_eq(sb_flow.state, "stt_ready", "STT came back: stt ready")
+assert_eq(sb_flow.status.stt, "up", "stt signal is up again")
+
+sb_flow:dispose()
 
 -- ============================================================================
 -- Test 6: Sidebar - Conversation Entries
@@ -352,6 +417,203 @@ assert_type(install.stop_whisper_server, "function", "stop_whisper_server is a f
 assert_type(install.probe_whisper_server, "function", "probe_whisper_server is a function")
 
 assert_eq(install.DEFAULT_PORT, 8674, "DEFAULT_PORT is 8674")
+
+-- ============================================================================
+-- Test 8b: Install Module - Subprocess Lifecycle (Issue #2: Variable Hoisting)
+-- ============================================================================
+section("8b. Install Module - Subprocess Lifecycle")
+
+-- Test that _spawn_whisper_server handles immediate server crash without hanging
+-- This tests the fix for Issue #2: finished/finish must be defined BEFORE jobstart
+local install_test = require("outloud.install")
+
+-- Mock vim.fn.jobstart to simulate immediate crash
+local orig_jobstart = vim.fn.jobstart
+local jobstart_called = false
+local on_exit_called = false
+
+vim.fn.jobstart = function(cmd, opts)
+	jobstart_called = true
+	-- Simulate immediate crash by calling on_exit synchronously (like real jobstart does)
+	if opts and opts.on_exit then
+		on_exit_called = true
+		opts.on_exit(nil, 127, 0)  -- exit code 127 = command not found / immediate crash
+		return -1  -- invalid job id
+	end
+	return 1
+end
+
+-- Mock vim.uv.new_timer to avoid actual timer creation
+local orig_uv_timer = vim.uv.new_timer
+vim.uv.new_timer = function()
+	return {
+		start = function() end,
+		stop = function() end,
+		is_closing = function() return false end,
+		close = function() end,
+	}
+end
+
+-- Test _spawn_whisper_server with immediate crash
+local phases = {}
+local spawn_ok, spawn_err = pcall(function()
+	install_test._spawn_whisper_server(
+		"whisper-server",
+		"/path/to/model.bin",
+		8000,
+		function(phase, detail)
+			table.insert(phases, { phase = phase, detail = detail })
+		end,
+		120000,  -- stall_ms
+		nil      -- on_ready
+	)
+end)
+
+assert_ok(spawn_ok, "_spawn_whisper_server does not error on immediate crash", spawn_err)
+assert_ok(jobstart_called, "jobstart was called")
+assert_ok(on_exit_called, "on_exit was called synchronously")
+-- Verify the error was reported (not silently swallowed)
+assert_ok(#phases >= 1, "at least one phase callback was called after crash")
+assert_eq(phases[1].phase, "error", "error phase reported after immediate crash")
+assert_ok(phases[1].detail ~= nil, "error detail provided")
+
+-- Verify job ID was cleared
+assert_eq(install_test._whisper_job_id, nil, "job ID cleared after crash")
+
+-- Restore mocks
+vim.fn.jobstart = orig_jobstart
+vim.uv.new_timer = orig_uv_timer
+
+	-- Test _spawn_llama_server with immediate crash
+	phases = {}
+	jobstart_called = false
+	on_exit_called = false
+
+	vim.fn.jobstart = function(cmd, opts)
+		jobstart_called = true
+		if opts and opts.on_exit then
+			on_exit_called = true
+			opts.on_exit(nil, 127, 0)
+			return -1
+		end
+		return 1
+	end
+
+	-- Mock executable check so it doesn't bail early
+	local orig_executable = vim.fn.executable
+	vim.fn.executable = function() return 1 end
+
+	local llama_ok, llama_err = pcall(function()
+		install_test._spawn_llama_server(
+			8674,
+			"TheBloke/Voxtral-7B-GGUF",
+			function(phase, detail)
+				table.insert(phases, { phase = phase, detail = detail })
+			end,
+			120000,
+			nil
+		)
+	end)
+
+	assert_ok(llama_ok, "_spawn_llama_server does not error on immediate crash", llama_err)
+	assert_ok(jobstart_called, "jobstart was called for llama")
+	assert_ok(on_exit_called, "on_exit was called synchronously for llama")
+	assert_ok(#phases >= 1, "at least one phase callback was called after llama crash")
+	assert_eq(phases[1].phase, "error", "error phase reported after llama crash")
+
+	-- Verify job ID was cleared
+	assert_eq(install_test._llama_job_id, nil, "llama job ID cleared after crash")
+
+	vim.fn.jobstart = orig_jobstart
+	vim.fn.executable = orig_executable
+	vim.uv.new_timer = orig_uv_timer
+
+-- ============================================================================
+-- Test 8c: Install Module - Stale Job ID (Issue #3)
+-- ============================================================================
+section("8c. Install Module - Stale Job ID")
+
+-- Test that finish(false) clears the job ID so a subsequent start_whisper_server
+-- doesn't see a stale ID and falsely call on_ready().
+-- We verify this by calling _spawn_whisper_server, letting it "crash" via on_exit,
+-- then confirming the job ID is nil.
+
+-- Mock jobstart to simulate immediate crash
+jobstart_called = false
+vim.fn.jobstart = function(cmd, opts)
+	jobstart_called = true
+	if opts and opts.on_exit then
+		opts.on_exit(nil, 1, 0)  -- non-zero exit
+		return 1  -- valid job id (simulates real spawn that then crashes)
+	end
+	return 1
+end
+
+-- Mock timer (won't be used since on_exit fires synchronously)
+vim.uv.new_timer = function()
+	return {
+		start = function() end,
+		stop = function() end,
+		is_closing = function() return false end,
+		close = function() end,
+	}
+end
+
+-- First call: simulate a failed spawn
+install_test._whisper_job_id = nil  -- start clean
+local phases = {}
+local spawn_ok, spawn_err = pcall(function()
+	install_test._spawn_whisper_server(
+		"whisper-server",
+		"/path/to/model.bin",
+		8000,
+		function(phase, detail)
+			table.insert(phases, { phase = phase, detail = detail })
+		end,
+		120000,
+		nil
+	)
+end)
+
+assert_ok(spawn_ok, "_spawn_whisper_server handles crash without error", spawn_err)
+assert_ok(#phases >= 1, "error phase reported")
+assert_eq(phases[1].phase, "error", "error phase after crash")
+
+-- The fix: job ID must be nil after finish(false) clears it
+assert_eq(install_test._whisper_job_id, nil, "job ID cleared by finish(false) — no stale ID")
+
+-- Now verify that a fresh start_whisper_server call won't see a stale ID
+-- (it will try to spawn, not short-circuit with "Already managed")
+-- We mock probe to return synchronously (no vim.schedule) so the test
+-- can check the result immediately.
+local orig_probe2 = install_test.probe_whisper_server
+install_test.probe_whisper_server = function(port, callback)
+	callback(false)  -- nothing alive, synchronously
+end
+
+-- Mock find_whisper_server to avoid real file access
+local orig_find_ws2 = install_test.find_whisper_server
+local orig_ensure2 = install_test._ensure_model_and_start
+local ensure_called = false
+install_test.find_whisper_server = function() return "/mock/whisper-server" end
+install_test._ensure_model_and_start = function() ensure_called = true end
+
+local start_ok2, start_err2 = pcall(function()
+	install_test.start_whisper_server({
+		on_phase = function() end,
+	})
+end)
+
+assert_ok(start_ok2, "start_whisper_server does not error after previous crash", start_err2)
+assert_ok(ensure_called, "start_whisper_server proceeds to spawn (no stale ID short-circuit)")
+
+-- Clean up
+install_test._whisper_job_id = nil
+install_test.probe_whisper_server = orig_probe2
+install_test.find_whisper_server = orig_find_ws2
+install_test._ensure_model_and_start = orig_ensure2
+vim.fn.jobstart = orig_jobstart
+vim.uv.new_timer = orig_uv_timer
 
 -- ============================================================================
 -- Test 9: Health Check

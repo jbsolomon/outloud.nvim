@@ -50,6 +50,9 @@ pub enum Event {
         devices: Vec<DeviceInfo>,
         default: Option<String>,
     },
+    /// STT backend liveness check result, emitted periodically.
+    #[serde(rename = "stt_health")]
+    SttHealth { healthy: bool },
 }
 
 /// Information about an available input device.

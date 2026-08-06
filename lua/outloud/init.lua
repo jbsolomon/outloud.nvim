@@ -291,10 +291,8 @@ function M.start()
 	end
 
 	local function on_server_ready()
-		signal("stt", "up")
-		ui_state("starting_daemon")
+		ui_state("initializing")
 		M._start_pipeline()
-		ui_state("ready")
 	end
 
 	-- Check if daemon needs rebuilding before starting
@@ -461,12 +459,24 @@ function M._start_pipeline()
 		ui.set_state(state)
 		ui.set_device(device)
 		vim.schedule(function()
+			local sb = M._ensure_sidebar()
 			if state == "listening" then
-				M._ensure_sidebar():set_state("listening")
-				M._ensure_sidebar():set_device(device)
+				sb:set_state("listening")
+				sb:set_device(device)
 			elseif state == "transcribing" then
-				M._ensure_sidebar():set_state("transcribing")
-				M._ensure_sidebar():set_device(device)
+				sb:set_state("transcribing")
+				sb:set_device(device)
+			elseif state == "idle" then
+				-- After "initializing", daemon alive → "audio input ready"
+				-- After recording, back to the appropriate ready state
+				local current = sb.state
+				if current == "initializing" then
+					sb:set_state("audio_ready")
+				elseif current == "stt_ready" then
+					-- stay stt_ready
+				elseif current == "stt_unavailable" then
+					-- stay stt_unavailable
+				end
 			end
 		end)
 	end)
@@ -491,6 +501,24 @@ function M._start_pipeline()
 				"[outloud] input devices:\n" .. table.concat(names, "\n"),
 				vim.log.levels.INFO
 			)
+		end)
+	end)
+
+	M._voice:on_stt_health(function(healthy)
+		vim.schedule(function()
+			local sb = M._ensure_sidebar()
+			sb:set_status("stt", healthy and "up" or "error")
+			if healthy then
+				-- STT came back (or confirmed) healthy
+				if sb.state == "audio_ready" or sb.state == "stt_unavailable" then
+					sb:set_state("stt_ready")
+				end
+			else
+				-- STT went down
+				if sb.state == "stt_ready" or sb.state == "audio_ready" then
+					sb:set_state("stt_unavailable")
+				end
+			end
 		end)
 	end)
 

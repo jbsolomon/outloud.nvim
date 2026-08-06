@@ -205,6 +205,25 @@ async fn main() -> Result<()> {
         token.clone(),
     ));
 
+    // Periodic STT health heartbeat — pings the server every 5s and emits
+    // an stt_health event so the UI can turn the signal light red.
+    let heartbeat_handle = tokio::spawn({
+        let transcriber = transcriber.clone();
+        let event_tx = event_tx.clone();
+        let token = token.clone();
+        async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                if token.is_cancelled() {
+                    break;
+                }
+                let healthy = transcriber.is_ready();
+                let _ = event_tx.send(Event::SttHealth { healthy }).await;
+            }
+        }
+    });
+
     // Build and run the pipeline. The pipeline is built once and reads from the
     // shared audio event channel. Start/stop commands control the cpal stream.
     let pipeline_result = PipelineBuilder::from(AudioSource::new(sync_rx))
@@ -221,6 +240,7 @@ async fn main() -> Result<()> {
     audio.stop();
     let _ = stdin_handle.await;
     let _ = writer_handle.await;
+    let _ = heartbeat_handle.await;
 
     pipeline_result.map_err(|e| anyhow::anyhow!("{e}"))
 }

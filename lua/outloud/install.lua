@@ -272,36 +272,6 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 		end
 	end
 
-	M._llama_job_id = vim.fn.jobstart({
-		"llama-server",
-		"-hf",
-		hf_repo,
-		"--port",
-		tostring(port),
-	}, {
-		on_stdout = function(_, data, _)
-			drain(data)
-		end,
-		on_stderr = function(_, data, _)
-			drain(data)
-		end,
-		on_exit = function(_, code, _)
-			M._llama_job_id = nil
-			if code ~= 0 then
-				vim.schedule(function()
-					vim.notify("[outloud] llama-server exited with code " .. code, vim.log.levels.WARN)
-				end)
-			end
-		end,
-	})
-
-	if M._llama_job_id <= 0 then
-		vim.notify("[outloud] failed to start llama-server", vim.log.levels.ERROR)
-		M._llama_job_id = nil
-		on_phase("error", "failed to spawn llama-server")
-		return
-	end
-
 	local timer = vim.uv.new_timer()
 	local finished = false
 	local in_flight = false
@@ -325,8 +295,50 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 			end
 		else
 			vim.notify("[outloud] " .. (message or "llama-server failed"), vim.log.levels.ERROR)
+			M._llama_job_id = nil
 			on_phase("error", message)
 		end
+	end
+
+	local job_id = vim.fn.jobstart({
+		"llama-server",
+		"-hf",
+		hf_repo,
+		"--port",
+		tostring(port),
+	}, {
+		on_stdout = function(_, data, _)
+			drain(data)
+		end,
+		on_stderr = function(_, data, _)
+			drain(data)
+		end,
+		on_exit = function(_, code, _)
+			M._llama_job_id = nil
+			if not finished then
+				local diag = #output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or ""
+				finish(false, ("llama-server exited with code %d%s"):format(code, diag))
+			elseif code ~= 0 then
+				vim.schedule(function()
+					vim.notify("[outloud] llama-server exited with code " .. code, vim.log.levels.WARN)
+				end)
+			end
+		end,
+	})
+
+	-- If on_exit fired synchronously (immediate crash), finished is now true
+	-- and M._llama_job_id was already cleared. Don't overwrite with stale ID.
+	if finished then
+		return
+	end
+
+	M._llama_job_id = job_id
+
+	if M._llama_job_id <= 0 then
+		vim.notify("[outloud] failed to start llama-server", vim.log.levels.ERROR)
+		M._llama_job_id = nil
+		on_phase("error", "failed to spawn llama-server")
+		return
 	end
 
 	timer:start(
@@ -336,9 +348,9 @@ function M._spawn_llama_server(port, hf_repo, on_phase, stall_ms, on_ready)
 			if finished then
 				return
 			end
-			if M._llama_job_id == nil then
-				return finish(false, "llama-server exited before becoming ready")
-			end
+	if M._llama_job_id == nil then
+			return finish(false, "llama-server exited before becoming ready" .. (#output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or ""))
+		end
 		if vim.uv.now() - last_progress > stall_ms then
 			local diag = #output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or "\nNo output captured."
 			return finish(
@@ -686,34 +698,6 @@ M._spawn_whisper_server = function(bin, model, port, on_phase, stall_ms, on_read
 		end
 	end
 
-	M._whisper_job_id = vim.fn.jobstart({
-		bin,
-		"--model",
-		model,
-		"--port",
-		tostring(port),
-	}, {
-		on_stdout = function(_, data, _) drain(data) end,
-		on_stderr = function(_, data, _) drain(data) end,
-		on_exit = function(_, code, _)
-			M._whisper_job_id = nil
-			if not finished then
-				finish(false, "whisper-server exited with code " .. code)
-			elseif code ~= 0 then
-				vim.schedule(function()
-					vim.notify("[outloud] whisper-server exited with code " .. code, vim.log.levels.WARN)
-				end)
-			end
-		end,
-	})
-
-	if M._whisper_job_id and M._whisper_job_id <= 0 then
-		vim.notify("[outloud] failed to start whisper-server", vim.log.levels.ERROR)
-		M._whisper_job_id = nil
-		on_phase("error", "failed to spawn whisper-server")
-		return
-	end
-
 	local timer = vim.uv.new_timer()
 	local finished = false
 	local in_flight = false
@@ -735,16 +719,54 @@ M._spawn_whisper_server = function(bin, model, port, on_phase, stall_ms, on_read
 			end
 		else
 			vim.notify("[outloud] " .. (message or "whisper-server failed"), vim.log.levels.ERROR)
+			M._whisper_job_id = nil
 			on_phase("error", message)
 		end
+	end
+
+	local job_id = vim.fn.jobstart({
+		bin,
+		"--model",
+		model,
+		"--port",
+		tostring(port),
+	}, {
+		on_stdout = function(_, data, _) drain(data) end,
+		on_stderr = function(_, data, _) drain(data) end,
+		on_exit = function(_, code, _)
+			M._whisper_job_id = nil
+			if not finished then
+				local diag = #output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or ""
+				finish(false, ("whisper-server exited with code %d%s"):format(code, diag))
+			elseif code ~= 0 then
+				vim.schedule(function()
+					vim.notify("[outloud] whisper-server exited with code " .. code, vim.log.levels.WARN)
+				end)
+			end
+		end,
+	})
+
+	-- If on_exit fired synchronously (immediate crash), finished is now true
+	-- and M._whisper_job_id was already cleared. Don't overwrite with stale ID.
+	if finished then
+		return
+	end
+
+	M._whisper_job_id = job_id
+
+	if M._whisper_job_id and M._whisper_job_id <= 0 then
+		vim.notify("[outloud] failed to start whisper-server", vim.log.levels.ERROR)
+		M._whisper_job_id = nil
+		on_phase("error", "failed to spawn whisper-server")
+		return
 	end
 
 	timer:start(500, 1000, vim.schedule_wrap(function()
 		if finished then
 			return
 		end
-		if M._whisper_job_id == nil then
-			return finish(false, "whisper-server exited before becoming ready")
+	if M._whisper_job_id == nil then
+			return finish(false, "whisper-server exited before becoming ready" .. (#output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or ""))
 		end
 		if vim.uv.now() - last_progress > stall_ms then
 			local diag = #output_buf > 0 and ("\nLast output:\n" .. table.concat(output_buf, "\n")) or "\nNo output captured."

@@ -76,6 +76,7 @@ local BUSY = {
 	downloading_model = true,
 	loading_model = true,
 	starting_daemon = true,
+	initializing = true,
 	transcribing = true,
 }
 
@@ -84,6 +85,10 @@ local STATE_LABEL = {
 	downloading_model = "downloading...",
 	loading_model = "loading model...",
 	starting_daemon = "starting daemon...",
+	initializing = "initializing...",
+	audio_ready = "audio input ready",
+	stt_ready = "stt ready — press to record",
+	stt_unavailable = "STT backend unavailable",
 	ready = "press to record",
 	listening = "recording... press to send",
 	transcribing = "transcribing...",
@@ -707,6 +712,24 @@ function Sidebar:is_open()
 	return self.win ~= nil and not self.win.closed
 end
 
+--- Reposition the sidebar to stay aligned with the current window.
+local function reposition_sidebar(sidebar)
+	if not sidebar:is_open() then
+		return
+	end
+	local win = vim.api.nvim_get_current_win()
+	local wc = vim.api.nvim_win_get_config(win)
+	local side = sidebar.opts.position == "left" and "left" or "right"
+	local col = side == "right"
+		and (wc.col + wc.width - sidebar.opts.width)
+		or wc.col
+	vim.api.nvim_win_set_config(sidebar.win.win, {
+		row = wc.row,
+		col = col,
+		height = wc.height,
+	})
+end
+
 --- Open the sidebar as a full-height edge-anchored floating window.
 ---@param focus? boolean steal the cursor (manual open) or not (auto-open)
 function Sidebar:open(focus)
@@ -721,16 +744,27 @@ function Sidebar:open(focus)
 		return
 	end
 
-self.win = Snacks.win({
-			buf = self.buf,
-			position = self.opts.position == "left" and "left" or "right",
-			width = self.opts.width,
-			height = vim.o.lines - 2,
-			border = "none",
-			zindex = 40,
-			enter = false,
-			resize = true,
-			wo = {
+	-- Position relative to the current window, not the full editor.
+	-- This keeps the sidebar visible when vertical splits (e.g., CodeCompanion) are open.
+	local win = vim.api.nvim_get_current_win()
+	local wc = vim.api.nvim_win_get_config(win)
+	local side = self.opts.position == "left" and "left" or "right"
+	local col = side == "right"
+		and (wc.col + wc.width - self.opts.width)
+		or wc.col
+
+	self.win = Snacks.win({
+		buf = self.buf,
+		position = "float",
+		row = wc.row,
+		col = col,
+		width = self.opts.width,
+		height = wc.height,
+		border = "none",
+		zindex = 40,
+		enter = false,
+		resize = true,
+		wo = {
 			wrap = false,
 			number = false,
 			relativenumber = false,
@@ -748,7 +782,7 @@ self.win = Snacks.win({
 	self:_render_header()
 	self:_render_all()
 
-	-- Re-flow content when the window is resized.
+	-- Re-flow content and reposition when the window is resized.
 	self._augroup = vim.api.nvim_create_augroup("outloud_sidebar", { clear = true })
 	vim.api.nvim_create_autocmd("WinResized", {
 		group = self._augroup,
@@ -756,6 +790,7 @@ self.win = Snacks.win({
 		desc = "outloud: re-flow sidebar on resize",
 		callback = function()
 			if self:is_open() then
+				reposition_sidebar(self)
 				self:_render_header()
 				self:_render_all()
 			end

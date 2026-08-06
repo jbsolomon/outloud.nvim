@@ -44,6 +44,8 @@ function Voice:_handle_line(line)
 		self.callbacks.error(data.message)
 	elseif event_type == "devices" and self.callbacks.devices then
 		self.callbacks.devices(data.devices, data.default)
+	elseif event_type == "stt_health" and self.callbacks.stt_health then
+		self.callbacks.stt_health(data.healthy)
 	end
 end
 
@@ -155,6 +157,11 @@ end
 ---@param callback fun(devices: table[], default_device: string?)
 function Voice:on_devices(callback)
 	self.callbacks.devices = callback
+end
+
+---@param callback fun(healthy: boolean)
+function Voice:on_stt_health(callback)
+	self.callbacks.stt_health = callback
 end
 
 ---@return boolean
