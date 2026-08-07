@@ -4,15 +4,20 @@ local Accumulator = require("outloud.accumulator").Accumulator
 local ui = require("outloud.ui")
 local install = require("outloud.install")
 
+local V = vim
+local VK = vim.keymap
+local VL = V.log
+local VLL = VL.levels
+
 local M = {}
 
 ---@class outloud.Config
----@field backend? string "whisper" (default) or "openai" (OpenAI-compatible)
----@field model { size?: string, path?: string, hf_repo?: string, server_port: number, server_url?: string }
----@field audio { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean, device?: string }
+---@field backend?    string                                                                                                                                                                                                        "whisper" (default) or "openai" (OpenAI-compatible)
+---@field model       { size?: string, path?: string, hf_repo?: string, server_port: number, server_url?: string }
+---@field audio       { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean, device?: string }
 ---@field accumulator { enabled: boolean, mode: string, handler?: table, context: table }
----@field ui { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
----@field keys { push_to_talk: string, cancel: string, sidebar: string }
+---@field ui          { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
+---@field keys        { push_to_talk: string, cancel: string, sidebar: string }
 ---@field daemon_cmd? string
 
 ---@type outloud.Config
@@ -21,7 +26,7 @@ M.defaults = {
 	model = {
 		size = "medium",           -- whisper model size: "tiny", "base", "small", "medium", "large"
 		hf_repo = install.HF_REPO, -- for openai backend: llama-server HuggingFace repo
-		server_port = install.WHISPER_DEFAULT_PORT,
+		server_port = install.WHISPER_DEFAULT_PORT
 		-- server_url = "http://127.0.0.1:8000",  -- override to use external server
 	},
 	audio = {
@@ -33,18 +38,18 @@ M.defaults = {
 		partial_interval_ms = 700,
 		window_ms = 5000,
 		live_buffer = true,
-		device = nil,   -- optional default device name
+		device = nil -- optional default device name
 	},
 	accumulator = {
 		enabled = false,
-		mode = "hidden",           -- "hidden" | "preview"
-		handler = nil,             -- { name = "default" } for CodeCompanion, or { fn = function(text, context) ... end }
+		mode = "hidden", -- "hidden" | "preview"
+		handler = nil,   -- { name = "default" } for CodeCompanion, or { fn = function(text, context) ... end }
 		context = {
 			buffer = true,
 			selection = true,
 			cursor = true,
 			diagnostics = false,
-			filename = true,
+			filename = true
 		},
 		scratchpad_system = [[You are editing a scratch pad. The user speaks instructions and you maintain the scratch pad content.
 
@@ -58,21 +63,21 @@ Here is the user's latest instruction:
 %s
 </instruction>
 
-Return only the updated scratch pad content. Do not include explanations or markdown fences.]],
+Return only the updated scratch pad content. Do not include explanations or markdown fences.]]
 	},
 	ui = {
 		sidebar_position = "right",
 		sidebar_width = 48,
 		sidebar_auto_open = true,
-		statusline = true,
+		statusline = true
 	},
 	keys = {
 		push_to_talk = "<leader>ls",
 		cancel = "<leader>lc",
 		sidebar = "<leader>ll",
 		scratchpad = "<leader>lp",
-		toggle_recording = "<leader>lt",
-	},
+		toggle_recording = "<leader>lt"
+	}
 }
 
 ---@type outloud.Config
@@ -114,7 +119,7 @@ function M._ensure_sidebar()
 		M._sidebar = Sidebar:new({
 			width = cfg.sidebar_width,
 			position = cfg.sidebar_position,
-			keys = M.config.keys or M.defaults.keys,
+			keys = M.config.keys or M.defaults.keys
 		})
 	end
 	return M._sidebar
@@ -129,20 +134,20 @@ end
 
 ---@param opts? table
 function M.setup(opts)
-	M.config = vim.tbl_deep_extend("force", M.defaults, opts or {})
+	M.config = V.tbl_deep_extend("force", M.defaults, opts or {})
 
 	local keys = M.config.keys
 
 	-- Never leave a daemon or llama-server process behind on exit.
-	vim.api.nvim_create_autocmd("VimLeavePre", {
-		group = vim.api.nvim_create_augroup("outloud_shutdown", { clear = true }),
+	V.api.nvim_create_autocmd("VimLeavePre", {
+		group = V.api.nvim_create_augroup("outloud_shutdown", { clear = true }),
 		desc = "outloud: shut down daemon and STT server",
-		callback = function()
+		callback = function ()
 			M.stop()
-		end,
+		end
 	})
 
-	vim.keymap.set("n", keys.push_to_talk, function()
+	VK.set("n", keys.push_to_talk, function ()
 		if not M._voice or not M._voice:is_running() then
 			M.start()
 		end
@@ -152,31 +157,35 @@ function M.setup(opts)
 			sidebar:open(false)
 		end
 		sidebar:set_state("ready")
-	end, { desc = "outloud: open" })
+	end, { desc = "outloud: open" }
+	)
 
-	vim.keymap.set("n", keys.cancel, function()
+	VK.set("n", keys.cancel, function ()
 		if M._voice and M._voice:is_running() then
 			M._voice:cancel()
 			M._listening = false
 			M._start_pending = false
 		end
-	end, { desc = "outloud: cancel" })
+	end, { desc = "outloud: cancel" }
+	)
 
-	vim.keymap.set("n", keys.sidebar, function()
+	VK.set("n", keys.sidebar, function ()
 		M._ensure_sidebar():toggle()
-	end, { desc = "outloud: toggle session sidebar" })
+	end, { desc = "outloud: toggle session sidebar" }
+	)
 
-	vim.keymap.set("n", keys.scratchpad, function()
+	VK.set("n", keys.scratchpad, function ()
 		if not M._accumulator then
-			vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
+			V.notify("[outloud] accumulator not active", VLL.WARN)
 			return
 		end
 		M._accumulator:toggle_scratchpad()
-	end, { desc = "outloud: toggle scratchpad preview" })
+	end, { desc = "outloud: toggle scratchpad preview" }
+	)
 
-	vim.keymap.set("n", keys.toggle_recording, function()
+	VK.set("n", keys.toggle_recording, function ()
 		if not M._voice or not M._voice:is_running() then
-			vim.notify("[outloud] waiting for daemon to start...", vim.log.levels.INFO)
+			V.notify("[outloud] waiting for daemon to start...", VLL.INFO)
 			return
 		end
 		if M._listening then
@@ -193,13 +202,14 @@ function M.setup(opts)
 			-- daemon's "status: listening" event to confirm.
 			M._start_pending = true
 		end
-	end, { desc = "outloud: toggle recording" })
+	end, { desc = "outloud: toggle recording" }
+	)
 end
 
 --- Build the environment variable table for the daemon process.
 ---@param backend string
----@param model table the model config table
----@param audio table the audio config table
+---@param model   table  the model config table
+---@param audio   table  the audio config table
 ---@return table<string, string>
 local function build_daemon_env(backend, model, audio)
 	local default_port = (backend == "whisper") and install.WHISPER_DEFAULT_PORT or install.DEFAULT_PORT
@@ -211,7 +221,7 @@ local function build_daemon_env(backend, model, audio)
 		OUTLOUD_SILENCE_MS = tostring(audio.silence_duration_ms),
 		OUTLOUD_MAX_MS = tostring(audio.max_duration_ms),
 		OUTLOUD_PARTIAL_MS = tostring(audio.partial_interval_ms),
-		OUTLOUD_WINDOW_MS = tostring(audio.window_ms),
+		OUTLOUD_WINDOW_MS = tostring(audio.window_ms)
 	}
 	if audio.device and audio.device ~= "" then
 		env.OUTLOUD_MIC_DEVICE = audio.device
@@ -220,13 +230,13 @@ local function build_daemon_env(backend, model, audio)
 end
 
 --- Probe an external STT server to see if it's online.
----@param url string the server URL
----@param cb fun(ok: boolean)
+---@param url string           the server URL
+---@param cb  fun(ok: boolean)
 local function probe_external_server(url, cb)
 	-- Extract host and port, determine health path from backend
 	local scheme, host, port = url:match("^(https?)://([^:/]+)(?::(%d+))?")
 	if not host then
-		vim.schedule(function()
+		V.schedule(function ()
 			cb(false)
 		end)
 		return
@@ -240,7 +250,7 @@ local function probe_external_server(url, cb)
 	local function try_next()
 		if idx > #health_paths then
 			-- All probes failed
-			vim.schedule(function()
+			V.schedule(function ()
 				cb(false)
 			end)
 			return
@@ -248,24 +258,25 @@ local function probe_external_server(url, cb)
 		local path = health_paths[idx]
 		local probe_url = string.format("%s://%s:%d%s", scheme, host, port, path)
 
-		vim.system({
+		V.system({
 			"curl",
 			"-sf",
 			"--connect-timeout",
 			"2",
 			"--max-time",
 			"3",
-			probe_url,
-		}, { text = true }, function(res)
-			if res.code == 0 then
-				vim.schedule(function()
-					cb(true)
-				end)
-			else
-				idx = idx + 1
-				try_next()
-			end
-		end)
+			probe_url
+		},
+			{ text = true }, function (res)
+				if res.code == 0 then
+					V.schedule(function ()
+						cb(true)
+					end)
+				else
+					idx = idx + 1
+					try_next()
+				end
+			end)
 	end
 
 	try_next()
@@ -286,13 +297,13 @@ function M.start()
 	local backend = M.config.backend or "whisper"
 
 	local function ui_state(state, detail)
-		vim.schedule(function()
+		V.schedule(function ()
 			M._ensure_sidebar():set_state(state, detail)
 		end)
 	end
 
 	local function signal(key, value)
-		vim.schedule(function()
+		V.schedule(function ()
 			M._ensure_sidebar():set_status(key, value)
 		end)
 	end
@@ -320,8 +331,8 @@ function M.start()
 	-- Check if daemon needs rebuilding before starting
 	if install.needs_rebuild() then
 		ui_state("starting_server", "building daemon...")
-		vim.notify("[outloud] daemon out of date, rebuilding...")
-		install.build_daemon(function(ok)
+		V.notify("[outloud] daemon out of date, rebuilding...")
+		install.build_daemon(function (ok)
 			if not ok then
 				M._starting = false
 				ui_state("inactive", "daemon build failed")
@@ -335,7 +346,7 @@ function M.start()
 end
 
 --- Internal: start the STT server and pipeline.
-_start_with_server = function(backend, ui_state, signal, on_server_phase, on_server_ready)
+_start_with_server = function (backend, ui_state, signal, on_server_phase, on_server_ready)
 	if not M.config.model.server_url then
 		signal("stt", "starting")
 		ui_state("starting_server")
@@ -345,20 +356,20 @@ _start_with_server = function(backend, ui_state, signal, on_server_phase, on_ser
 				port = M.config.model.server_port or install.WHISPER_DEFAULT_PORT,
 				model_size = M.config.model.size or "medium",
 				model_path = M.config.model.path,
-				on_phase = on_server_phase,
+				on_phase = on_server_phase
 			}, on_server_ready)
 		else
 			install.start_llama_server({
 				port = M.config.model.server_port or install.DEFAULT_PORT,
 				hf_repo = M.config.model.hf_repo,
-				on_phase = on_server_phase,
+				on_phase = on_server_phase
 			}, on_server_ready)
 		end
 	else
 		-- External server: probe it first
 		signal("stt", "starting")
 		ui_state("starting_server")
-		probe_external_server(M.config.model.server_url, function(ok)
+		probe_external_server(M.config.model.server_url, function (ok)
 			M._starting = false
 			if ok then
 				signal("stt", "up")
@@ -368,9 +379,9 @@ _start_with_server = function(backend, ui_state, signal, on_server_phase, on_ser
 			else
 				signal("stt", "error")
 				ui_state("inactive", "external server unreachable")
-				vim.notify(
+				V.notify(
 					"[outloud] external STT server unreachable: " .. M.config.model.server_url,
-					vim.log.levels.ERROR
+					VLL.ERROR
 				)
 			end
 		end)
@@ -400,51 +411,51 @@ function M._start_pipeline()
 		M._accumulator = Accumulator:new(M.config.accumulator)
 	end
 
-	M._voice:on_transcript(function(text, duration_ms)
+	M._voice:on_transcript(function (text, duration_ms)
 		M._state = "idle"
 		ui.set_state("idle")
 		M._listening = false
-		vim.schedule(function()
+		V.schedule(function ()
 			local sb = M._ensure_sidebar()
 			sb:begin_turn(text)
 			sb:set_state("idle")
 		end)
 
-	if accum_enabled and M._accumulator then
-		-- Accumulator mode: add final transcript to accumulator
-		vim.schedule(function()
-			local accum_mode = M.config.accumulator and M.config.accumulator.mode
-			if accum_mode == "scratchpad" then
-				-- Scratchpad mode: iterate the scratchpad with the latest utterance
-				M._accumulator:iterate(text)
-			else
-				-- Classic accumulator mode: append to buffer
-				M._accumulator:append(text)
-			end
-		end)
+		if accum_enabled and M._accumulator then
+			-- Accumulator mode: add final transcript to accumulator
+			V.schedule(function ()
+				local accum_mode = M.config.accumulator and M.config.accumulator.mode
+				if accum_mode == "scratchpad" then
+					-- Scratchpad mode: iterate the scratchpad with the latest utterance
+					M._accumulator:iterate(text)
+				else
+					-- Classic accumulator mode: append to buffer
+					M._accumulator:append(text)
+				end
+			end)
 		else
 			-- Direct insertion mode: replace any partial insertion range with the complete text.
-			vim.schedule(function()
-				local buf = vim.api.nvim_get_current_buf()
-				vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
+			V.schedule(function ()
+				local buf = V.api.nvim_get_current_buf()
+				V.api.nvim_set_option_value("modifiable", true, { buf = buf })
 
 				if M._partial_range then
 					-- Replace the tracked partial range with the final transcript
 					local r = M._partial_range
 					M._partial_range = nil
-					local lines = vim.split(text, "\n")
-					vim.api.nvim_buf_set_text(buf, r.sline, r.scol, r.eline, r.ecol, lines)
+					local lines = V.split(text, "\n")
+					V.api.nvim_buf_set_text(buf, r.sline, r.scol, r.eline, r.ecol, lines)
 				else
 					-- No partials were shown, insert at cursor like before
-					local line = vim.api.nvim_win_get_cursor(0)[1] - 1
-					local col = vim.api.nvim_win_get_cursor(0)[2]
-					local lines = vim.split(text, "\n")
+					local line = V.api.nvim_win_get_cursor(0)[1] - 1
+					local col = V.api.nvim_win_get_cursor(0)[2]
+					local lines = V.split(text, "\n")
 					if #lines == 1 then
-						vim.api.nvim_buf_set_text(buf, line, col, line, col, { text })
+						V.api.nvim_buf_set_text(buf, line, col, line, col, { text })
 					else
-						vim.api.nvim_buf_set_lines(buf, line, line, false, { lines[1] })
+						V.api.nvim_buf_set_lines(buf, line, line, false, { lines[1] })
 						for i = 2, #lines do
-							vim.api.nvim_buf_add_line(buf, lines[i], true)
+							V.api.nvim_buf_add_line(buf, lines[i], true)
 						end
 					end
 				end
@@ -452,24 +463,24 @@ function M._start_pipeline()
 		end
 	end)
 
-	M._voice:on_partial(function(text)
+	M._voice:on_partial(function (text)
 		local accum_mode = M.config.accumulator and M.config.accumulator.mode
 		if accum_enabled and M._accumulator and text ~= "" then
 			if accum_mode == "scratchpad" then
 				-- Scratchpad mode: partials are just appended for preview,
 				-- iteration happens on final transcript
-				vim.schedule(function()
+				V.schedule(function ()
 					M._accumulator:append(text)
 				end)
 			else
 				-- Classic accumulator mode: feed partials into the accumulator
-				vim.schedule(function()
+				V.schedule(function ()
 					M._accumulator:append(text)
 				end)
 			end
 		else
 			-- Direct insertion mode: show in sidebar
-			vim.schedule(function()
+			V.schedule(function ()
 				if text ~= "" then
 					M._ensure_sidebar():set_partial(text)
 				end
@@ -477,11 +488,18 @@ function M._start_pipeline()
 		end
 	end)
 
-	M._voice:on_status(function(state, device, backend)
+	M._voice:on_status(function (state, device, backend_status)
 		M._state = state
 		M._active_device = device
 		ui.set_state(state)
 		ui.set_device(device)
+
+		-- state: 'idle'|'listening'|'transcribing'
+		-- backend_status: {
+		--   status: 'pending'|'healthy'|'unhealthy',
+		--   error: string
+		-- }
+
 		if state == "listening" and M._start_pending then
 			-- Daemon confirmed the start we requested. Stale "listening"
 			-- re-emits (e.g. a heartbeat that was in flight before a stop)
@@ -489,7 +507,8 @@ function M._start_pipeline()
 			M._listening = true
 			M._start_pending = false
 		end
-		vim.schedule(function()
+
+		V.schedule(function ()
 			local sb = M._ensure_sidebar()
 
 			-- Backend health transitions. Every daemon status carries a
@@ -497,67 +516,60 @@ function M._start_pipeline()
 			-- the transition into "unhealthy" so the 5s heartbeat doesn't
 			-- spam the conversation while the server is down.
 			local prev_backend = M._backend_status
-			if backend and backend.status then
-				M._backend_status = backend.status
+			if backend_status and backend_status.status then
+				M._backend_status = backend_status.status
 			end
 
-			if backend and backend.status == "pending" then
+			if backend_status and backend_status.status == "pending" then
 				-- Daemon alive, waiting for STT probe
 				sb:set_state("initializing")
-			elseif backend and backend.status == "healthy" then
+			elseif backend_status and backend_status.status == "healthy" then
 				sb:set_status("stt", "up")
 				if state == "idle" then
 					sb:set_state("stt_ready")
+				elseif state == "listening" then
+					sb:set_state("listening")
+					sb:set_device(device)
+				elseif state == "transcribing" then
+					sb:set_state("transcribing")
+					sb:set_device(device)
 				end
-			elseif backend and backend.status == "unhealthy" then
+			elseif backend_status and backend_status.status == "unhealthy" then
 				sb:set_status("stt", "error")
-				if backend.error and prev_backend ~= "unhealthy" then
-					sb:add_error("STT: " .. backend.error)
+				if backend_status.error and prev_backend ~= "unhealthy" then
+					sb:add_error("STT: " .. backend_status.error)
 				end
 				sb:set_state("stt_unavailable")
 			end
-
-			if state == "listening" then
-				sb:set_state("listening")
-				sb:set_device(device)
-			elseif state == "transcribing" then
-				sb:set_state("transcribing")
-				sb:set_device(device)
-			end
-			-- state == "idle": keep whatever the backend health chose above
-			-- (initializing / stt_ready / stt_unavailable).
 		end)
 	end)
 
-	M._voice:on_error(function(message)
-		vim.schedule(function()
+	M._voice:on_error(function (message)
+		V.schedule(function ()
 			M._listening = false
 			M._start_pending = false
-			vim.notify("[outloud] daemon error: " .. message, vim.log.levels.ERROR)
+			V.notify("[outloud] daemon error: " .. message, VLL.ERROR)
 			local sb = M._ensure_sidebar()
 			sb:set_status("daemon", "error")
 			sb:add_error("daemon: " .. message)
 		end)
 	end)
 
-	M._voice:on_devices(function(devices, default)
-		vim.schedule(function()
+	M._voice:on_devices(function (devices, default)
+		V.schedule(function ()
 			local names = {}
 			for _, d in ipairs(devices) do
 				local mark = d.is_default and " *" or ""
 				names[#names + 1] = d.name .. mark
 			end
-			vim.notify(
-				"[outloud] input devices:\n" .. table.concat(names, "\n"),
-				vim.log.levels.INFO
-			)
+			V.notify("[outloud] input devices:\n" .. table.concat(names, "\n"), VLL.INFO)
 		end)
 	end)
 
 	-- Daemon process death (crash, device loss, external kill): reflect it in
 	-- the UI instead of leaving stale "listening"/"up" state behind.
-	M._voice:on_exit(function(code)
-		vim.schedule(function()
+	M._voice:on_exit(function (code)
+		V.schedule(function ()
 			M._listening = false
 			M._start_pending = false
 			if M._sidebar then
@@ -567,10 +579,7 @@ function M._start_pipeline()
 				end
 			end
 			if code ~= 0 then
-				vim.notify(
-					("[outloud] daemon exited unexpectedly (code %d)"):format(code),
-					vim.log.levels.WARN
-				)
+				V.notify(("[outloud] daemon exited unexpectedly (code %d)"):format(code), VLL.WARN)
 			end
 		end)
 	end)
@@ -584,7 +593,7 @@ end
 function M.stop()
 	M._starting = false
 	if M._voice then
-		pcall(function()
+		pcall(function ()
 			M._voice:stop()
 		end)
 		M._voice = nil
@@ -621,7 +630,7 @@ end
 --- List available input devices.
 function M.list_devices()
 	if not M._voice or not M._voice:is_running() then
-		vim.notify("[outloud] daemon not running", vim.log.levels.WARN)
+		V.notify("[outloud] daemon not running", VLL.WARN)
 		return
 	end
 	M._voice:list_devices()
@@ -630,14 +639,14 @@ end
 --- Confirm the accumulated text: invoke the handler and apply the result.
 function M.confirm_accumulator()
 	if not M._accumulator then
-		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
+		V.notify("[outloud] accumulator not active", VLL.WARN)
 		return
 	end
 	if not M._accumulator:has_text() then
-		vim.notify("[outloud] accumulator is empty", vim.log.levels.WARN)
+		V.notify("[outloud] accumulator is empty", VLL.WARN)
 		return
 	end
-	M._accumulator:confirm(function(text)
+	M._accumulator:confirm(function (text)
 		-- After handler completes, insert result at cursor
 		local sb = M._ensure_sidebar()
 		sb:begin_turn(text)
@@ -648,17 +657,17 @@ end
 --- Cancel and discard the accumulated text.
 function M.cancel_accumulator()
 	if not M._accumulator then
-		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
+		V.notify("[outloud] accumulator not active", VLL.WARN)
 		return
 	end
 	M._accumulator:clear()
-	vim.notify("[outloud] accumulator cleared", vim.log.levels.INFO)
+	V.notify("[outloud] accumulator cleared", VLL.INFO)
 end
 
 --- Clear the accumulation without cancelling.
 function M.clear_accumulator()
 	if not M._accumulator then
-		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
+		V.notify("[outloud] accumulator not active", VLL.WARN)
 		return
 	end
 	M._accumulator:clear()
@@ -667,7 +676,7 @@ end
 --- Toggle the scratchpad floating preview window.
 function M.toggle_scratchpad()
 	if not M._accumulator then
-		vim.notify("[outloud] accumulator not active", vim.log.levels.WARN)
+		V.notify("[outloud] accumulator not active", VLL.WARN)
 		return
 	end
 	M._accumulator:toggle_scratchpad()
