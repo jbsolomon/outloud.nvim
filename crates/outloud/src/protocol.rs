@@ -12,6 +12,9 @@ pub enum Command {
         /// Optional device name to use for this listening session.
         /// If omitted, falls back to config default or system default.
         device: Option<String>,
+        /// The native sample format of the device (e.g. "i16", "f32").
+        /// If omitted, the daemon probes the device itself.
+        sample_format: Option<String>,
     },
     #[serde(rename = "stop_listening")]
     StopListening,
@@ -155,6 +158,8 @@ pub struct DeviceInfo {
     pub name: String,
     #[serde(rename = "is_default")]
     pub is_default: bool,
+    /// The native sample format reported by the device (e.g. "i16", "f32", "u16").
+    pub sample_format: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -212,14 +217,20 @@ mod tests {
     #[test]
     fn parse_start_listening() {
         let cmd = parse_command(r#"{"cmd": "start_listening"}"#).unwrap();
-        assert!(matches!(cmd, Command::StartListening { device: None }));
+        assert!(matches!(
+            cmd,
+            Command::StartListening {
+                device: None,
+                sample_format: _
+            }
+        ));
     }
 
     #[test]
     fn parse_start_listening_with_device() {
         let cmd = parse_command(r#"{"cmd": "start_listening", "device": "Blue Yeti"}"#).unwrap();
         match cmd {
-            Command::StartListening { device } => {
+            Command::StartListening { device, .. } => {
                 assert_eq!(device.as_deref(), Some("Blue Yeti"));
             }
             _ => panic!("expected StartListening"),

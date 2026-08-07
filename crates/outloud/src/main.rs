@@ -16,8 +16,7 @@ use tokio_util::sync::CancellationToken;
 /// OUTLOUD_STT_BACKEND — backend name: "whisper" (default) or "openai"
 /// OUTLOUD_STT_URL — server URL (default depends on backend)
 fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
-    let backend =
-        std::env::var("OUTLOUD_STT_BACKEND").unwrap_or_else(|_| "whisper".to_string());
+    let backend = std::env::var("OUTLOUD_STT_BACKEND").unwrap_or_else(|_| "whisper".to_string());
 
     match backend.as_str() {
         #[cfg(feature = "whisper")]
@@ -27,7 +26,9 @@ fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
             };
             let server_url =
                 std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
-            Ok(Box::new(WhisperTranscriber::new(WhisperTranscriberConfig { server_url })))
+            Ok(Box::new(WhisperTranscriber::new(
+                WhisperTranscriberConfig { server_url },
+            )))
         }
         #[cfg(feature = "openai")]
         "openai" => {
@@ -36,7 +37,9 @@ fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
             };
             let server_url =
                 std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
-            Ok(Box::new(HttpTranscriber::new(HttpTranscriberConfig { server_url })))
+            Ok(Box::new(HttpTranscriber::new(HttpTranscriberConfig {
+                server_url,
+            })))
         }
         _ => anyhow::bail!("unknown STT backend: {}", backend),
     }
@@ -73,6 +76,9 @@ async fn stdin_command_loop(
     token: CancellationToken,
     tracker: StatusTracker,
 ) {
+    use outloud::protocol::Command::*;
+    use outloud::protocol::DeviceInfo;
+
     let _ = tokio::task::spawn_blocking(move || {
         let stdin = io::stdin().lock();
         for line in stdin.lines() {
@@ -86,11 +92,16 @@ async fn stdin_command_loop(
 
             match parse_command(&line) {
                 Ok(cmd) => match cmd {
-                    outloud::protocol::Command::StartListening { device } => {
-                        // Open the cpal stream on the requested device.
+                    StartListening {
+                        device,
+                        sample_format,
+                    } => {
+                        // Open the cpal stream on the requested device, in the
+                        // native sample format forwarded by the client (or
+                        // probed from the device when omitted).
                         // Audio events flow into the shared channel that the
                         // pipeline is already reading from.
-                        match audio.start(device.as_deref()) {
+                        match audio.start(device.as_deref(), sample_format.as_deref()) {
                             Ok(()) => {
                                 let active = audio.device_name();
                                 let _ = event_tx
@@ -107,38 +118,33 @@ async fn stdin_command_loop(
                             }
                         }
                     }
-                    outloud::protocol::Command::StopListening
-                    | outloud::protocol::Command::Cancel => {
+                    StopListening | Cancel => {
                         audio.stop();
                         let _ = event_tx.blocking_send(tracker.transition(State::Idle, None));
                     }
-                    outloud::protocol::Command::ListDevices => {
-                        match AudioCapture::list_devices() {
-                            Ok(devs) => {
-                                let devices: Vec<outloud::protocol::DeviceInfo> = devs
-                                    .into_iter()
-                                    .map(|(name, is_default)| outloud::protocol::DeviceInfo {
-                                        name,
-                                        is_default,
-                                    })
-                                    .collect();
-                                let default = devices
-                                    .iter()
-                                    .find(|d| d.is_default)
-                                    .map(|d| d.name.clone());
-                                let _ = event_tx.blocking_send(Event::Devices {
-                                    devices,
-                                    default,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = event_tx.blocking_send(Event::Error {
-                                    message: format!("listing devices failed: {e}"),
-                                });
-                            }
+                    ListDevices => match AudioCapture::list_devices() {
+                        Ok(devs) => {
+                            let devices: Vec<DeviceInfo> = devs
+                                .into_iter()
+                                .map(|(name, is_default, sample_format)| DeviceInfo {
+                                    name,
+                                    is_default,
+                                    sample_format,
+                                })
+                                .collect();
+                            let default = devices
+                                .iter()
+                                .find(|d| d.is_default)
+                                .map(|d| d.name.clone());
+                            let _ = event_tx.blocking_send(Event::Devices { devices, default });
                         }
-                    }
-                    outloud::protocol::Command::Shutdown => {
+                        Err(e) => {
+                            let _ = event_tx.blocking_send(Event::Error {
+                                message: format!("listing devices failed: {e}"),
+                            });
+                        }
+                    },
+                    Shutdown => {
                         token.cancel();
                         break;
                     }
@@ -271,4 +277,3 @@ async fn main() -> Result<()> {
 
     pipeline_result.map_err(|e| anyhow::anyhow!("{e}"))
 }
-

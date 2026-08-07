@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{FromSample, Sample};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -127,6 +128,36 @@ mod tests {
         assert_eq!(cfg.max_duration_ms, 30000);
         assert_eq!(cfg.window_ms, 5000);
     }
+
+    #[test]
+    fn parse_sample_format_known() {
+        assert!(matches!(
+            parse_sample_format("i16"),
+            Some(cpal::SampleFormat::I16)
+        ));
+        assert!(matches!(
+            parse_sample_format("u16"),
+            Some(cpal::SampleFormat::U16)
+        ));
+        assert!(matches!(
+            parse_sample_format("f32"),
+            Some(cpal::SampleFormat::F32)
+        ));
+        assert!(matches!(
+            parse_sample_format("F32"),
+            Some(cpal::SampleFormat::F32)
+        ));
+        assert!(matches!(
+            parse_sample_format(" i16 "),
+            Some(cpal::SampleFormat::I16)
+        ));
+    }
+
+    #[test]
+    fn parse_sample_format_unknown() {
+        assert_eq!(parse_sample_format("banana"), None);
+        assert_eq!(parse_sample_format(""), None);
+    }
 }
 
 impl AudioConfig {
@@ -186,7 +217,11 @@ pub enum AudioEvent {
         seq: u64,
     },
     /// A complete utterance was captured.
-    Utterance { samples: Vec<f32>, sample_rate: u32, duration_ms: u64 },
+    Utterance {
+        samples: Vec<f32>,
+        sample_rate: u32,
+        duration_ms: u64,
+    },
     /// An error occurred.
     Error(String),
     /// Device info emitted when a capture session starts.
@@ -222,15 +257,17 @@ fn resolve_device(name: Option<&str>) -> Result<(cpal::Device, String)> {
     match name {
         Some(n) => {
             for d in host.input_devices()? {
-                if d.name()?.eq_ignore_ascii_case(n) {
+                if d.to_string().eq_ignore_ascii_case(n) {
                     return Ok((d, n.to_string()));
                 }
             }
             anyhow::bail!("input device '{}' not found", n);
         }
         None => {
-            let device = host.default_input_device().context("no input device available")?;
-            let name = device.name().unwrap_or_else(|_| "default".to_string());
+            let device = host
+                .default_input_device()
+                .context("no input device available")?;
+            let name = device.to_string();
             Ok((device, name))
         }
     }
@@ -259,24 +296,29 @@ impl AudioCapture {
         self.device_name.lock().unwrap().clone()
     }
 
-    /// Returns a list of available input devices as (name, is_default) pairs.
-    pub fn list_devices() -> Result<Vec<(String, bool)>> {
+    /// Returns a list of available input devices as (name, is_default, sample_format) tuples.
+    pub fn list_devices() -> Result<Vec<(String, bool, String)>> {
         let host = cpal::default_host();
         let default_name = host
             .default_input_device()
-            .and_then(|d| d.name().ok())
+            .map(|d| d.to_string())
             .unwrap_or_default();
 
         let mut devices = host
             .input_devices()?
-            .filter_map(|d| {
-                let name = d.name().ok()?;
-                Some((name.clone(), name == default_name))
+            .map(|d| {
+                let name = d.to_string();
+                let sample_format = d
+                    .default_input_config()
+                    .ok()
+                    .map(|c| c.sample_format().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                (name.clone(), name == default_name, sample_format)
             })
             .collect::<Vec<_>>();
 
         // Sort so default is first
-        devices.sort_by(|a, b| b.1.cmp(&a.1));
+        devices.sort_by_key(|d| std::cmp::Reverse(d.1));
         Ok(devices)
     }
 
@@ -285,14 +327,20 @@ impl AudioCapture {
     /// If `device_name` is `Some`, uses that device. Falls back to
     /// `config.device_name`, then system default.
     ///
+    /// `sample_format` is the device's native sample format as forwarded in
+    /// the `start_listening` request (e.g. `"i16"`, `"f32"`). The cpal stream
+    /// is opened in exactly that format, avoiding cpal's internal conversion
+    /// layer. If `None`, the daemon probes the device's default input config
+    /// itself.
+    ///
     /// The cpal stream is opened in a background thread and kept alive
     /// until `stop()` is called. Audio events flow into the shared channel
     /// that the pipeline reads from (obtained via `receiver()`).
-    pub fn start(&self, device_name: Option<&str>) -> Result<()> {
+    pub fn start(&self, device_name: Option<&str>, sample_format: Option<&str>) -> Result<()> {
         // Close any existing session first
         self.stop();
 
-        let (device, name) = resolve_device(device_name.or_else(|| self.config.device_name.as_deref()))
+        let (device, name) = resolve_device(device_name.or(self.config.device_name.as_deref()))
             .context("no input device available")?;
 
         // Update the active device name
@@ -302,6 +350,14 @@ impl AudioCapture {
             .default_input_config()
             .context("no supported input config")?;
 
+        // Sample format: prefer the one forwarded in the start request,
+        // otherwise probe the device itself.
+        let sample_format = match sample_format {
+            Some(s) => parse_sample_format(s)
+                .with_context(|| format!("unsupported sample format '{s}' in start request"))?,
+            None => supported.sample_format(),
+        };
+
         let stream_config = cpal::StreamConfig {
             channels: supported.channels().min(self.config.channels),
             sample_rate: supported.sample_rate(),
@@ -309,20 +365,18 @@ impl AudioCapture {
         };
 
         let listening = Arc::new(AtomicBool::new(true));
-        let threshold = self.config.vad_threshold;
-        let silence_dur = Duration::from_millis(self.config.silence_duration_ms);
-        let max_dur = Duration::from_millis(self.config.max_duration_ms);
-        let partial_interval = self.config.partial_interval_ms;
-        let window_ms = self.config.window_ms;
-        let sample_rate = stream_config.sample_rate.0;
-        let device_channels = stream_config.channels as usize;
+        let params = CaptureParams {
+            threshold: self.config.vad_threshold,
+            silence_dur: Duration::from_millis(self.config.silence_duration_ms),
+            max_dur: Duration::from_millis(self.config.max_duration_ms),
+            partial_interval: self.config.partial_interval_ms,
+            window_ms: self.config.window_ms,
+            sample_rate: stream_config.sample_rate,
+            device_channels: stream_config.channels as usize,
+        };
 
-        let state = Arc::new(Mutex::new(CaptureState::new()));
-
-        let state_clone = state.clone();
         let tx_data = self.event_tx.clone();
         let tx_err = self.event_tx.clone();
-        let listening_clone = listening.clone();
 
         // Build the stream in a background thread so we can keep it alive
         // without leaking memory. The thread holds the stream; dropping
@@ -330,106 +384,43 @@ impl AudioCapture {
         let (drop_tx, drop_rx) = std::sync::mpsc::channel();
 
         let _handle = std::thread::spawn(move || {
-            let stream = device.build_input_stream(
-                &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if !listening_clone.load(Ordering::Relaxed) {
-                        return;
-                    }
+            // Build a stream whose data callback receives samples in the
+            // device's native format; they are converted to f32 inside the
+            // callback so the VAD pipeline stays format-agnostic.
+            macro_rules! build_typed {
+                ($t:ty) => {
+                    build_typed_stream::<$t>(
+                        &device,
+                        stream_config,
+                        params,
+                        listening.clone(),
+                        tx_data.clone(),
+                        tx_err.clone(),
+                    )
+                };
+            }
 
-                    // Downmix to mono if device has multiple channels
-                    let mono: Vec<f32> = if device_channels > 1 {
-                        data.chunks(device_channels)
-                            .map(|frame| frame.iter().sum::<f32>() / device_channels as f32)
-                            .collect()
-                    } else {
-                        data.to_vec()
-                    };
-                    let data = &mono;
-
-                    let rms = (data.iter().map(|s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                    let is_speech = rms > threshold;
-
-                    let mut st = state_clone.lock().unwrap();
-
-                    // Detect speech start/stop transitions
-                    if is_speech && !st.was_speaking {
-                        st.was_speaking = true;
-                        st.speech_start = Some(Instant::now());
-                        st.last_speech = Instant::now();
-                        st.last_partial = Instant::now();
-                        let _ = tx_data.send(AudioEvent::Vad(true));
-                    } else if is_speech {
-                        st.last_speech = Instant::now();
-                    }
-
-                    // Accumulate samples while speaking
-                    if st.was_speaking {
-                        st.buffer.extend_from_slice(data);
-                    }
-
-                    // Check for silence timeout or max duration
-                    if st.was_speaking {
-                        let since_speech = st.last_speech.elapsed();
-                        let since_start = st
-                            .speech_start
-                            .map(|s| s.elapsed())
-                            .unwrap_or(Duration::ZERO);
-
-                        if since_speech >= silence_dur || since_start >= max_dur {
-                            st.was_speaking = false;
-                            let _ = tx_data.send(AudioEvent::Vad(false));
-
-                            let samples = std::mem::take(&mut st.buffer);
-                            let duration_ms = (samples.len() as u64 * 1000) / sample_rate as u64;
-                            let _ = tx_data.send(AudioEvent::Utterance {
-                                samples,
-                                sample_rate,
-                                duration_ms,
-                            });
-
-                            st.speech_start = None;
-                        } else if partial_interval > 0
-                            && st.last_partial.elapsed() >= Duration::from_millis(partial_interval)
-                            && !st.partial_in_flight
-                        {
-                            // Sliding window: only transcribe the most recent window_ms
-                            // of audio, keeping each request constant-size.
-                            st.last_partial = Instant::now();
-                            st.partial_in_flight = true;
-
-                            let total_samples = st.buffer.len();
-                            let window_samples = (window_ms as usize * sample_rate as usize) / 1000;
-                            let window_start = total_samples.saturating_sub(window_samples);
-                            let window = st.buffer[window_start..].to_vec();
-
-                            let window_start_ms = (window_start as u64 * 1000) / sample_rate as u64;
-                            let window_end_ms = (total_samples as u64 * 1000) / sample_rate as u64;
-
-                            st.seq += 1;
-                            let _ = tx_data.send(AudioEvent::Partial {
-                                samples: window,
-                                sample_rate,
-                                window_start_ms,
-                                window_end_ms,
-                                seq: st.seq,
-                            });
-                        }
-                    }
-                },
-                {
-                    let tx_err2 = tx_err.clone();
-                    move |err| {
-                        let _ = tx_err2.send(AudioEvent::Error(format!("audio stream error: {err}")));
-                    }
-                },
-                None,
-            );
+            let stream: Result<cpal::Stream, String> = match sample_format {
+                cpal::SampleFormat::I8 => build_typed!(i8),
+                cpal::SampleFormat::I16 => build_typed!(i16),
+                cpal::SampleFormat::I32 => build_typed!(i32),
+                cpal::SampleFormat::I64 => build_typed!(i64),
+                cpal::SampleFormat::U8 => build_typed!(u8),
+                cpal::SampleFormat::U16 => build_typed!(u16),
+                cpal::SampleFormat::U32 => build_typed!(u32),
+                cpal::SampleFormat::U64 => build_typed!(u64),
+                cpal::SampleFormat::F32 => build_typed!(f32),
+                cpal::SampleFormat::F64 => build_typed!(f64),
+                // I24/U24/DSD formats are exotic for microphone input;
+                // report an error rather than guessing at a conversion.
+                other => Err(format!("unsupported sample format: {other}")),
+            };
 
             match stream {
                 Ok(s) => {
                     if let Err(e) = s.play() {
-                        let _ = tx_err.send(AudioEvent::Error(format!("failed to play stream: {e}")));
+                        let _ =
+                            tx_err.send(AudioEvent::Error(format!("failed to play stream: {e}")));
                     }
                     // Block until drop signal is received. Dropping `s` releases the cpal stream.
                     let _ = drop_rx.recv();
@@ -442,7 +433,9 @@ impl AudioCapture {
         });
 
         // Store the handle so we can close the stream on stop()
-        *self.stream_handle.lock().unwrap() = Some(StreamHandle { _drop_signal: drop_tx });
+        *self.stream_handle.lock().unwrap() = Some(StreamHandle {
+            _drop_signal: drop_tx,
+        });
 
         Ok(())
     }
@@ -461,6 +454,174 @@ impl AudioCapture {
     /// Returns true if a capture session is currently active.
     pub fn is_active(&self) -> bool {
         self.stream_handle.lock().unwrap().is_some()
+    }
+}
+
+/// Fixed capture parameters shared by every input stream callback,
+/// regardless of the device's native sample format.
+#[derive(Clone, Copy)]
+struct CaptureParams {
+    /// RMS energy threshold for speech detection.
+    threshold: f32,
+    /// Trailing silence before finalizing an utterance.
+    silence_dur: Duration,
+    /// Maximum utterance length.
+    max_dur: Duration,
+    /// How often to emit partials; zero disables them.
+    partial_interval: u64,
+    /// Sliding window size for partial transcription.
+    window_ms: u64,
+    /// The stream's sample rate (the device's native rate).
+    sample_rate: u32,
+    /// Number of channels on the device (pre-downmix).
+    device_channels: usize,
+}
+
+/// Parse a sample format string forwarded in the `start_listening` request
+/// (e.g. `"i16"`, `"f32"`). Returns `None` for unknown formats.
+fn parse_sample_format(s: &str) -> Option<cpal::SampleFormat> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "i8" => Some(cpal::SampleFormat::I8),
+        "i16" => Some(cpal::SampleFormat::I16),
+        "i32" => Some(cpal::SampleFormat::I32),
+        "i64" => Some(cpal::SampleFormat::I64),
+        "u8" => Some(cpal::SampleFormat::U8),
+        "u16" => Some(cpal::SampleFormat::U16),
+        "u32" => Some(cpal::SampleFormat::U32),
+        "u64" => Some(cpal::SampleFormat::U64),
+        "f32" => Some(cpal::SampleFormat::F32),
+        "f64" => Some(cpal::SampleFormat::F64),
+        _ => None,
+    }
+}
+
+/// Build a cpal input stream whose data callback receives samples in the
+/// native format `T`. Samples are converted to f32 inside the callback, so
+/// the VAD pipeline below stays format-agnostic.
+fn build_typed_stream<T>(
+    device: &cpal::Device,
+    stream_config: cpal::StreamConfig,
+    params: CaptureParams,
+    listening: Arc<AtomicBool>,
+    tx_data: mpsc::Sender<AudioEvent>,
+    tx_err: mpsc::Sender<AudioEvent>,
+) -> Result<cpal::Stream, String>
+where
+    T: cpal::SizedSample,
+    f32: FromSample<T>,
+{
+    let state = Arc::new(Mutex::new(CaptureState::new()));
+    device
+        .build_input_stream(
+            stream_config,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                handle_input(data, &listening, &state, &tx_data, params);
+            },
+            move |err| {
+                let _ = tx_err.send(AudioEvent::Error(format!("audio stream error: {err}")));
+            },
+            None,
+        )
+        .map_err(|e| e.to_string())
+}
+
+/// Input callback body: converts native samples to mono f32 and runs the
+/// energy-based VAD state machine.
+fn handle_input<T>(
+    data: &[T],
+    listening: &AtomicBool,
+    state: &Mutex<CaptureState>,
+    tx_data: &mpsc::Sender<AudioEvent>,
+    params: CaptureParams,
+) where
+    T: cpal::Sample,
+    f32: FromSample<T>,
+{
+    if !listening.load(Ordering::Relaxed) {
+        return;
+    }
+
+    // Convert to mono f32, downmixing if the device has multiple channels.
+    let mono: Vec<f32> = if params.device_channels > 1 {
+        data.chunks(params.device_channels)
+            .map(|frame| {
+                frame.iter().map(|&s| f32::from_sample(s)).sum::<f32>()
+                    / params.device_channels as f32
+            })
+            .collect()
+    } else {
+        data.iter().map(|&s| f32::from_sample(s)).collect()
+    };
+    let data = &mono;
+
+    let rms = (data.iter().map(|s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+    let is_speech = rms > params.threshold;
+
+    let mut st = state.lock().unwrap();
+
+    // Detect speech start/stop transitions
+    if is_speech && !st.was_speaking {
+        st.was_speaking = true;
+        st.speech_start = Some(Instant::now());
+        st.last_speech = Instant::now();
+        st.last_partial = Instant::now();
+        let _ = tx_data.send(AudioEvent::Vad(true));
+    } else if is_speech {
+        st.last_speech = Instant::now();
+    }
+
+    // Accumulate samples while speaking
+    if st.was_speaking {
+        st.buffer.extend_from_slice(data);
+    }
+
+    // Check for silence timeout or max duration
+    if st.was_speaking {
+        let since_speech = st.last_speech.elapsed();
+        let since_start = st
+            .speech_start
+            .map(|s| s.elapsed())
+            .unwrap_or(Duration::ZERO);
+
+        if since_speech >= params.silence_dur || since_start >= params.max_dur {
+            st.was_speaking = false;
+            let _ = tx_data.send(AudioEvent::Vad(false));
+
+            let samples = std::mem::take(&mut st.buffer);
+            let duration_ms = (samples.len() as u64 * 1000) / params.sample_rate as u64;
+            let _ = tx_data.send(AudioEvent::Utterance {
+                samples,
+                sample_rate: params.sample_rate,
+                duration_ms,
+            });
+
+            st.speech_start = None;
+        } else if params.partial_interval > 0
+            && st.last_partial.elapsed() >= Duration::from_millis(params.partial_interval)
+            && !st.partial_in_flight
+        {
+            // Sliding window: only transcribe the most recent window_ms
+            // of audio, keeping each request constant-size.
+            st.last_partial = Instant::now();
+            st.partial_in_flight = true;
+
+            let total_samples = st.buffer.len();
+            let window_samples = (params.window_ms as usize * params.sample_rate as usize) / 1000;
+            let window_start = total_samples.saturating_sub(window_samples);
+            let window = st.buffer[window_start..].to_vec();
+
+            let window_start_ms = (window_start as u64 * 1000) / params.sample_rate as u64;
+            let window_end_ms = (total_samples as u64 * 1000) / params.sample_rate as u64;
+
+            st.seq += 1;
+            let _ = tx_data.send(AudioEvent::Partial {
+                samples: window,
+                sample_rate: params.sample_rate,
+                window_start_ms,
+                window_end_ms,
+                seq: st.seq,
+            });
+        }
     }
 }
 

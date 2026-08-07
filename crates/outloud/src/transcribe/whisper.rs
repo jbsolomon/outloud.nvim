@@ -36,13 +36,12 @@ impl WhisperTranscriber {
     fn try_inference_endpoint(&self, wav_bytes: &[u8]) -> Result<String> {
         let url = format!("{}/inference", self.server_url);
 
-        let form = reqwest::blocking::multipart::Form::new()
-            .part(
-                "file",
-                reqwest::blocking::multipart::Part::bytes(wav_bytes.to_vec())
-                    .file_name("audio.wav")
-                    .mime_str("audio/wav")?,
-            );
+        let form = reqwest::blocking::multipart::Form::new().part(
+            "file",
+            reqwest::blocking::multipart::Part::bytes(wav_bytes.to_vec())
+                .file_name("audio.wav")
+                .mime_str("audio/wav")?,
+        );
 
         let resp = self
             .client
@@ -57,9 +56,7 @@ impl WhisperTranscriber {
             anyhow::bail!("inference endpoint returned {status}: {body}");
         }
 
-        let body: InferenceResponse = resp
-            .json()
-            .context("failed to parse inference response")?;
+        let body: InferenceResponse = resp.json().context("failed to parse inference response")?;
         Ok(body.text.trim().to_string())
     }
 }

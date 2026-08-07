@@ -20,9 +20,9 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 streamsafe.workspace = true
-cpal = "0.15"
+cpal = "0.18"
 
 # http backend (llama-server, vLLM, etc.)
-reqwest = { version = "0.12", features = ["json", "multipart", "blocking"], optional = true }
-base64 = { version = "0.22", optional = true }
+reqwest = { version = "0.13", features = ["json", "multipart", "blocking"], optional = true }
+base64 = { version = "0.23", optional = true }
 hound = { version = "3.5", optional = true }

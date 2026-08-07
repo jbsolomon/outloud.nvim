@@ -28,10 +28,7 @@ pub struct TranscribeTransform {
 }
 
 impl TranscribeTransform {
-    pub fn new(
-        transcriber: Arc<dyn SpeechTranscriber>,
-        stt_available: bool,
-    ) -> Self {
+    pub fn new(transcriber: Arc<dyn SpeechTranscriber>, stt_available: bool) -> Self {
         Self {
             transcriber,
             stt_available,
