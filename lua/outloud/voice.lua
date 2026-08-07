@@ -35,6 +35,18 @@ function Voice:_handle_line(line)
 		return
 	end
 
+	-- The protocol's nullable fields (`device` on status events, `default` on
+	-- devices events) serialize as explicit JSON null when unset, and
+	-- vim.json.decode maps null to the vim.NIL userdata sentinel rather than
+	-- Lua nil. Normalize them here so callbacks never receive userdata —
+	-- concatenating one (e.g. in the sidebar header) would raise.
+	if data.device == vim.NIL then
+		data.device = nil
+	end
+	if data.default == vim.NIL then
+		data.default = nil
+	end
+
 	local event_type = data.type
 	if event_type == "transcript" and self.callbacks.transcript then
 		self.callbacks.transcript(data.text, data.duration_ms)

@@ -246,6 +246,20 @@ assert_eq(#events, 9, "nine events after unhealthy status")
 assert_eq(events[9].backend.status, "unhealthy", "backend status is unhealthy")
 assert_eq(events[9].backend.error, "whisper at http://127.0.0.1:8000 is unreachable", "backend error carried")
 
+-- Regression: an idle heartbeat serializes the unset device as explicit JSON
+-- null. vim.json.decode maps null to the vim.NIL userdata sentinel; the
+-- decode boundary must normalize it back to Lua nil so callbacks never see
+-- userdata (the sidebar header used to crash concatenating it).
+test_voice:_handle_line(vim.json.encode({
+  type = "status",
+  state = "idle",
+  device = vim.NIL,
+  backend = { status = "healthy" },
+}))
+assert_eq(#events, 10, "ten events after null-device status")
+assert_eq(events[10].device, nil, "null device delivered as Lua nil")
+assert_eq(events[10].backend.status, "healthy", "backend health intact")
+
 -- Device format forwarding: start_listening attaches the native sample
 -- format cached from the daemon's list_devices response.
 local fmt_voice = Voice:new({})
@@ -285,6 +299,19 @@ assert_eq(sent[4].sample_format, nil, "unknown device forwards no format")
 -- Explicit override wins over the cache
 fmt_voice:start_listening(nil, "u16")
 assert_eq(sent[5].sample_format, "u16", "explicit sample_format wins")
+
+-- Devices response with no system default: the wire carries JSON null, which
+-- must be normalized to Lua nil so the format cache is not poisoned with
+-- vim.NIL (that would crash the `name:lower()` lookup on the next start).
+fmt_voice:_handle_line(vim.json.encode({
+  type = "devices",
+  devices = { { name = "Blue Yeti", is_default = false, sample_format = "f32" } },
+  default = vim.NIL,
+}))
+assert_eq(fmt_voice.default_device, nil, "null default device normalized")
+fmt_voice:start_listening()
+assert_eq(sent[6].cmd, "start_listening", "start sent after null-default devices")
+assert_eq(sent[6].sample_format, nil, "null default forwards no format")
 
 -- ============================================================================
 -- Test 5: Sidebar - Construction & State Management
