@@ -246,6 +246,46 @@ assert_eq(#events, 9, "nine events after unhealthy status")
 assert_eq(events[9].backend.status, "unhealthy", "backend status is unhealthy")
 assert_eq(events[9].backend.error, "whisper at http://127.0.0.1:8000 is unreachable", "backend error carried")
 
+-- Device format forwarding: start_listening attaches the native sample
+-- format cached from the daemon's list_devices response.
+local fmt_voice = Voice:new({})
+local sent = {}
+fmt_voice._send = function(_, cmd)
+  table.insert(sent, cmd)
+end
+
+-- No device info yet: nothing forwarded (daemon probes the device itself)
+fmt_voice:start_listening()
+assert_eq(sent[1].cmd, "start_listening", "start command sent")
+assert_eq(sent[1].sample_format, nil, "no sample_format before devices known")
+
+-- Simulate the daemon reporting devices with their native formats
+fmt_voice:_handle_line(vim.json.encode({
+  type = "devices",
+  devices = {
+    { name = "Microphone (Realtek)", is_default = true, sample_format = "i16" },
+    { name = "Blue Yeti", is_default = false, sample_format = "f32" },
+  },
+  default = "Microphone (Realtek)",
+}))
+
+-- Default device: its native format is forwarded
+fmt_voice:start_listening()
+assert_eq(sent[2].sample_format, "i16", "default device native format forwarded")
+
+-- Named device: case-insensitive lookup forwards its format
+fmt_voice:start_listening("blue yeti")
+assert_eq(sent[3].device, "blue yeti", "device name forwarded")
+assert_eq(sent[3].sample_format, "f32", "named device native format forwarded")
+
+-- Unknown device: nothing forwarded, daemon falls back to probing
+fmt_voice:start_listening("Nonexistent Device")
+assert_eq(sent[4].sample_format, nil, "unknown device forwards no format")
+
+-- Explicit override wins over the cache
+fmt_voice:start_listening(nil, "u16")
+assert_eq(sent[5].sample_format, "u16", "explicit sample_format wins")
+
 -- ============================================================================
 -- Test 5: Sidebar - Construction & State Management
 -- ============================================================================

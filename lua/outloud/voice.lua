@@ -5,6 +5,8 @@ local M = {}
 ---@field partial string buffered partial line from stdout
 ---@field callbacks table<string, function>
 ---@field daemon_cmd string
+---@field device_formats table<string, string>? lowercased device name -> native sample format
+---@field default_device string? default input device name from the last list_devices response
 local Voice = {}
 Voice.__index = Voice
 
@@ -17,6 +19,8 @@ function Voice:new(opts)
 		callbacks = {},
 		daemon_cmd = opts.daemon_cmd or "outloud",
 		env = opts.env or {},
+		device_formats = nil,
+		default_device = nil,
 	}, Voice)
 end
 
@@ -42,8 +46,11 @@ function Voice:_handle_line(line)
 		self.callbacks.vad(data.speaking)
 	elseif event_type == "error" and self.callbacks.error then
 		self.callbacks.error(data.message)
-	elseif event_type == "devices" and self.callbacks.devices then
-		self.callbacks.devices(data.devices, data.default)
+	elseif event_type == "devices" then
+		self:_cache_devices(data.devices, data.default)
+		if self.callbacks.devices then
+			self.callbacks.devices(data.devices, data.default)
+		end
 	end
 end
 
@@ -102,12 +109,51 @@ function Voice:stop()
 end
 
 ---@param device? string optional device name
-function Voice:start_listening(device)
+---@param sample_format? string optional explicit native sample format (e.g. "i16")
+function Voice:start_listening(device, sample_format)
 	local cmd = { cmd = "start_listening" }
 	if device then
 		cmd.device = device
 	end
+	-- Forward the device's native sample format so the daemon can open the
+	-- stream without a conversion layer. When unknown, omit it and let the
+	-- daemon probe the device itself.
+	local fmt = sample_format or self:_native_format(device)
+	if fmt then
+		cmd.sample_format = fmt
+	end
 	self:_send(cmd)
+end
+
+--- Cache the native sample formats reported by the daemon's `list_devices`
+--- response, keyed by lowercased device name.
+---@param devices table[]
+---@param default_device string?
+function Voice:_cache_devices(devices, default_device)
+	local formats = {}
+	for _, d in ipairs(devices or {}) do
+		if d.name and d.sample_format then
+			formats[d.name:lower()] = d.sample_format
+		end
+	end
+	self.device_formats = formats
+	self.default_device = default_device
+end
+
+--- Resolve the native sample format for the device about to be opened, from
+--- the cached `list_devices` response. `nil` device means the default device.
+--- Returns `nil` when unknown (the daemon then probes the device itself).
+---@param device? string
+---@return string?
+function Voice:_native_format(device)
+	if not self.device_formats then
+		return nil
+	end
+	local name = device or self.default_device
+	if not name then
+		return nil
+	end
+	return self.device_formats[name:lower()]
 end
 
 function Voice:stop_listening()

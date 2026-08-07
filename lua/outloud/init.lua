@@ -560,7 +560,8 @@ function M._start_pipeline()
 			local names = {}
 			for _, d in ipairs(devices) do
 				local mark = d.is_default and " *" or ""
-				names[#names + 1] = d.name .. mark
+				local fmt = d.sample_format and (" [" .. d.sample_format .. "]") or ""
+				names[#names + 1] = d.name .. mark .. fmt
 			end
 			V.notify("[outloud] input devices:\n" .. table.concat(names, "\n"), VLL.INFO)
 		end)
@@ -586,6 +587,13 @@ function M._start_pipeline()
 
 	M._voice:start()
 	sidebar:set_status("daemon", M._voice:is_running() and "up" or "error")
+
+	-- Pre-fetch the device list so the first start_listening can forward the
+	-- device's native sample format. If this response hasn't arrived yet,
+	-- the daemon probes the device itself.
+	if M._voice:is_running() then
+		M._voice:list_devices()
+	end
 end
 
 --- Tear everything down: daemon, STT server, and UI. Also runs on
