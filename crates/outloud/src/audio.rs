@@ -11,9 +11,14 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// Configuration for audio capture.
+///
+/// The cpal stream is always opened with the device's native channel count
+/// and sample rate: on WASAPI (Windows) the shared-mode audio engine only
+/// accepts the mix format, so requesting anything else (e.g. mono from a
+/// stereo mic array) fails with `StreamConfigNotSupported`. The VAD pipeline
+/// downmixes to mono f32 in the stream callback, so the device layout is
+/// transparent to everything downstream.
 pub struct AudioConfig {
-    pub sample_rate: u32,
-    pub channels: u16,
     pub vad_threshold: f32,
     pub silence_duration_ms: u64,
     pub max_duration_ms: u64,
@@ -30,8 +35,6 @@ pub struct AudioConfig {
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
-            sample_rate: 16000,
-            channels: 1,
             vad_threshold: 0.01,
             // Trailing-silence wait before finalizing. This is the dominant
             // perceived-latency knob, so it is kept short.
@@ -51,8 +54,6 @@ mod tests {
     #[test]
     fn default_config() {
         let cfg = AudioConfig::default();
-        assert_eq!(cfg.sample_rate, 16000);
-        assert_eq!(cfg.channels, 1);
         assert_eq!(cfg.vad_threshold, 0.01);
         assert_eq!(cfg.silence_duration_ms, 400);
         assert_eq!(cfg.max_duration_ms, 30000);
@@ -64,8 +65,6 @@ mod tests {
     fn from_env_no_vars() {
         // With no OUTLOUD_* env vars set, should fall back to defaults
         let cfg = AudioConfig::from_env_map(std::iter::empty::<(&str, &str)>());
-        assert_eq!(cfg.sample_rate, 16000);
-        assert_eq!(cfg.channels, 1);
         assert_eq!(cfg.vad_threshold, 0.01);
         assert_eq!(cfg.silence_duration_ms, 400);
         assert_eq!(cfg.max_duration_ms, 30000);
@@ -158,6 +157,57 @@ mod tests {
         assert_eq!(parse_sample_format("banana"), None);
         assert_eq!(parse_sample_format(""), None);
     }
+
+    /// The audio callback claims the shared partial gate when emitting a
+    /// partial and drops newer partials while the gate is held; releasing
+    /// the gate (as the transcription stage does) resumes emission.
+    #[test]
+    fn partials_are_single_in_flight_via_shared_gate() {
+        let gate = Arc::new(AtomicBool::new(false));
+        let params = CaptureParams {
+            threshold: 0.01,
+            silence_dur: Duration::from_millis(400),
+            max_dur: Duration::from_millis(30000),
+            partial_interval: 700,
+            window_ms: 5000,
+            sample_rate: 16000,
+            device_channels: 1,
+            partial_gate: gate.clone(),
+        };
+        let listening = AtomicBool::new(true);
+        let state = Mutex::new(CaptureState::new());
+        let (tx, rx) = mpsc::channel();
+        // 10 ms of audio comfortably above the VAD threshold.
+        let speech = vec![0.5f32; 160];
+
+        // Speech start: VAD event only, no partial yet (interval not elapsed).
+        handle_input(&speech, &listening, &state, &tx, &params);
+        assert!(matches!(rx.try_recv().unwrap(), AudioEvent::Vad(true)));
+
+        // Interval elapsed → partial emitted, gate claimed.
+        state.lock().unwrap().last_partial = Instant::now() - Duration::from_secs(1);
+        handle_input(&speech, &listening, &state, &tx, &params);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            AudioEvent::Partial { seq: 1, .. }
+        ));
+        assert!(gate.load(Ordering::Relaxed));
+
+        // Gate held → the next partial is dropped at the source.
+        state.lock().unwrap().last_partial = Instant::now() - Duration::from_secs(1);
+        handle_input(&speech, &listening, &state, &tx, &params);
+        assert!(rx.try_recv().is_err());
+
+        // Gate released (transcription completed) → partials resume.
+        gate.store(false, Ordering::Relaxed);
+        state.lock().unwrap().last_partial = Instant::now() - Duration::from_secs(1);
+        handle_input(&speech, &listening, &state, &tx, &params);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            AudioEvent::Partial { seq: 2, .. }
+        ));
+        assert!(gate.load(Ordering::Relaxed));
+    }
 }
 
 impl AudioConfig {
@@ -182,8 +232,6 @@ impl AudioConfig {
         }
         let d = AudioConfig::default();
         AudioConfig {
-            sample_rate: d.sample_rate,
-            channels: d.channels,
             vad_threshold: parse(&map, "OUTLOUD_VAD_THRESHOLD", d.vad_threshold),
             silence_duration_ms: parse(&map, "OUTLOUD_SILENCE_MS", d.silence_duration_ms),
             max_duration_ms: parse(&map, "OUTLOUD_MAX_MS", d.max_duration_ms),
@@ -242,6 +290,11 @@ pub struct AudioCapture {
     stream_handle: Mutex<Option<StreamHandle>>,
     /// The device name for the **currently active** session.
     device_name: Mutex<Option<String>>,
+    /// Single-in-flight gate for partials, shared with the transcription
+    /// stage: claimed (compare-exchange) in the audio callback when a
+    /// partial is emitted, released by the transform once that partial has
+    /// been processed. While held, new partials are dropped at the source.
+    partial_gate: Arc<AtomicBool>,
 }
 
 /// Keeps a cpal stream alive in a background thread. Dropping this handle
@@ -276,9 +329,17 @@ fn resolve_device(name: Option<&str>) -> Result<(cpal::Device, String)> {
 impl AudioCapture {
     /// Create a new AudioCapture without opening any audio stream.
     ///
+    /// `partial_gate` is shared with the transcription stage: the audio
+    /// callback claims it when emitting a partial and the transform releases
+    /// it once that partial has been processed (see `GateGuard` in
+    /// `pipeline/transform.rs`).
+    ///
     /// Returns `(self, receiver)` — the receiver is handed to the pipeline
     /// at startup; all sessions write into the shared sender.
-    pub fn new(config: AudioConfig) -> (Self, mpsc::Receiver<AudioEvent>) {
+    pub fn new(
+        config: AudioConfig,
+        partial_gate: Arc<AtomicBool>,
+    ) -> (Self, mpsc::Receiver<AudioEvent>) {
         let (event_tx, event_rx) = mpsc::channel();
         (
             Self {
@@ -286,6 +347,7 @@ impl AudioCapture {
                 event_tx,
                 stream_handle: Mutex::new(None),
                 device_name: Mutex::new(None),
+                partial_gate,
             },
             event_rx,
         )
@@ -340,6 +402,12 @@ impl AudioCapture {
         // Close any existing session first
         self.stop();
 
+        // Every session starts with a free partial gate. A partial from a
+        // previous session may still be in the pipeline and will release
+        // the gate again when it completes — harmless, since `latest_seq`
+        // in the transform discards stale results either way.
+        self.partial_gate.store(false, Ordering::Release);
+
         let (device, name) = resolve_device(device_name.or(self.config.device_name.as_deref()))
             .context("no input device available")?;
 
@@ -358,8 +426,14 @@ impl AudioCapture {
             None => supported.sample_format(),
         };
 
+        // Open the stream in the device's native configuration. Requesting
+        // anything else — e.g. fewer channels than the hardware provides —
+        // is rejected by WASAPI's shared-mode engine with
+        // `StreamConfigNotSupported` ("The requested stream configuration is
+        // not supported by the device"). Multi-channel input is downmixed to
+        // mono in the stream callback, so capturing every channel is safe.
         let stream_config = cpal::StreamConfig {
-            channels: supported.channels().min(self.config.channels),
+            channels: supported.channels(),
             sample_rate: supported.sample_rate(),
             buffer_size: cpal::BufferSize::Default,
         };
@@ -373,6 +447,7 @@ impl AudioCapture {
             window_ms: self.config.window_ms,
             sample_rate: stream_config.sample_rate,
             device_channels: stream_config.channels as usize,
+            partial_gate: self.partial_gate.clone(),
         };
 
         let tx_data = self.event_tx.clone();
@@ -459,7 +534,7 @@ impl AudioCapture {
 
 /// Fixed capture parameters shared by every input stream callback,
 /// regardless of the device's native sample format.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct CaptureParams {
     /// RMS energy threshold for speech detection.
     threshold: f32,
@@ -475,6 +550,10 @@ struct CaptureParams {
     sample_rate: u32,
     /// Number of channels on the device (pre-downmix).
     device_channels: usize,
+    /// Single-in-flight gate for partials, shared with the transcription
+    /// stage. Claimed with a compare-exchange when a partial is emitted;
+    /// released by the transform when that partial has been processed.
+    partial_gate: Arc<AtomicBool>,
 }
 
 /// Parse a sample format string forwarded in the `start_listening` request
@@ -515,7 +594,7 @@ where
         .build_input_stream(
             stream_config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                handle_input(data, &listening, &state, &tx_data, params);
+                handle_input(data, &listening, &state, &tx_data, &params);
             },
             move |err| {
                 let _ = tx_err.send(AudioEvent::Error(format!("audio stream error: {err}")));
@@ -532,7 +611,7 @@ fn handle_input<T>(
     listening: &AtomicBool,
     state: &Mutex<CaptureState>,
     tx_data: &mpsc::Sender<AudioEvent>,
-    params: CaptureParams,
+    params: &CaptureParams,
 ) where
     T: cpal::Sample,
     f32: FromSample<T>,
@@ -598,12 +677,21 @@ fn handle_input<T>(
             st.speech_start = None;
         } else if params.partial_interval > 0
             && st.last_partial.elapsed() >= Duration::from_millis(params.partial_interval)
-            && !st.partial_in_flight
+            && params
+                .partial_gate
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
         {
             // Sliding window: only transcribe the most recent window_ms
             // of audio, keeping each request constant-size.
+            //
+            // The compare-exchange above claimed the single-in-flight gate;
+            // the transcription stage releases it once this partial has been
+            // processed (see `GateGuard` in transform.rs). While the gate is
+            // held, newer partials are dropped here at the source: the
+            // latest window always wins and a slow STT backend cannot build
+            // up a backlog of stale windows.
             st.last_partial = Instant::now();
-            st.partial_in_flight = true;
 
             let total_samples = st.buffer.len();
             let window_samples = (params.window_ms as usize * params.sample_rate as usize) / 1000;
@@ -631,8 +719,6 @@ struct CaptureState {
     last_speech: Instant,
     speech_start: Option<Instant>,
     last_partial: Instant,
-    /// True while a partial transcription is in flight (latest-wins policy).
-    partial_in_flight: bool,
     /// Monotonic sequence number for partial ordering.
     seq: u64,
 }
@@ -645,7 +731,6 @@ impl CaptureState {
             last_speech: Instant::now(),
             speech_start: None,
             last_partial: Instant::now(),
-            partial_in_flight: false,
             seq: 0,
         }
     }

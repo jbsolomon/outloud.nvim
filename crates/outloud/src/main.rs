@@ -1,5 +1,6 @@
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use outloud::audio::{AudioCapture, AudioConfig};
@@ -215,10 +216,16 @@ async fn main() -> Result<()> {
             .await;
     }
 
+    // Single-in-flight gate for partials, shared between the audio callback
+    // (claims it when emitting a partial) and the transcription stage
+    // (releases it when that partial has been processed). While held, newer
+    // partials are dropped at the source.
+    let partial_gate = Arc::new(AtomicBool::new(false));
+
     // Audio capture — no stream opened yet. The pipeline reads from the shared
     // channel; individual sessions open/close the cpal stream via start()/stop().
     // new() returns (self, receiver) — receiver goes to pipeline, self is shared via Arc.
-    let (audio, sync_rx) = AudioCapture::new(AudioConfig::from_env());
+    let (audio, sync_rx) = AudioCapture::new(AudioConfig::from_env(), partial_gate.clone());
     let audio = Arc::new(audio);
 
     let token = CancellationToken::new();
@@ -264,7 +271,11 @@ async fn main() -> Result<()> {
     // shared audio event channel. Start/stop commands control the cpal stream.
     let pipeline_result = PipelineBuilder::from(AudioSource::new(sync_rx))
         .filter_pipe(VadFilter::new(event_tx.clone(), tracker.clone()))
-        .pipe(TranscribeTransform::new(transcriber, stt_available))
+        .pipe(TranscribeTransform::new(
+            transcriber,
+            stt_available,
+            partial_gate,
+        ))
         .into(EventSink::new(event_tx, tracker))
         .run_with_token(token)
         .await;

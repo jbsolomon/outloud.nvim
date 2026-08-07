@@ -106,6 +106,13 @@ M._backend_status = nil
 ---@type string?
 M._active_device = nil
 
+---@type boolean true when a device list was explicitly requested via
+---:OutloudDevices. The daemon also answers a silent list_devices pre-fetch
+---on startup (used to cache native sample formats); only an explicit request
+---shows the list, since a multi-line vim.notify can block on a hit-enter
+---prompt.
+M._devices_requested = false
+
 ---@type table?
 M._partial_range = nil
 
@@ -556,6 +563,13 @@ function M._start_pipeline()
 	end)
 
 	M._voice:on_devices(function (devices, default)
+		-- Silent for the startup pre-fetch; only an explicit :OutloudDevices
+		-- request shows the list. With no configured device the daemon opens
+		-- the system default (the first entry of its sorted list) anyway.
+		if not M._devices_requested then
+			return
+		end
+		M._devices_requested = false
 		V.schedule(function ()
 			local names = {}
 			for _, d in ipairs(devices) do
@@ -628,6 +642,7 @@ function M.stop()
 	M._listening = false
 	M._start_pending = false
 	M._backend_status = nil
+	M._devices_requested = false
 end
 
 ---@return string
@@ -641,6 +656,7 @@ function M.list_devices()
 		V.notify("[outloud] daemon not running", VLL.WARN)
 		return
 	end
+	M._devices_requested = true
 	M._voice:list_devices()
 end
 
