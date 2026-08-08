@@ -440,7 +440,6 @@ function M._start_pipeline()
 	M._voice:on_transcript(function (text, duration_ms)
 		M._state = "idle"
 		ui.set_state("idle")
-		M._listening = false
 		V.schedule(function ()
 			local sb = M._ensure_sidebar()
 			local accum_mode = M.config.accumulator and M.config.accumulator.mode
