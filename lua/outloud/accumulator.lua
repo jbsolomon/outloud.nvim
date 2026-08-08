@@ -25,6 +25,9 @@ local M = {}
 ---@field _partial_text string   raw partial text accumulated since last iteration (scratchpad mode only)
 ---@field _iterating boolean    gate to prevent concurrent LLM calls
 ---@field _scratchpad Scratchpad?  floating preview window
+---@field _cc_chat table?       CodeCompanion chat object for follow-up messages
+---@field _pending_fragments string[]  fragments accumulated while LLM is processing or during post-result delay
+---@field _delay_timer userdata?  timer for the post-result accumulation delay
 local Accumulator = {}
 Accumulator.__index = Accumulator
 
@@ -72,6 +75,9 @@ function Accumulator:new(opts)
 		_iterating = false,
 		_augroup = nil,
 		_scratchpad = nil,
+		_cc_chat = nil,
+		_pending_fragments = {},
+		_delay_timer = nil,
 	}, Accumulator)
 end
 
@@ -240,6 +246,11 @@ end
 --- queue is empty). Called from `iterate()` and recursively from
 --- `_apply_scratchpad_update` — always via vim.schedule so the event loop
 --- stays responsive between LLM calls.
+---
+--- In scratchpad mode with CodeCompanion, the first utterance creates a
+--- hidden chat session. Subsequent utterances (accumulated while the LLM
+--- was processing or during the post-result delay window) are sent as
+--- follow-up messages to the *same* chat, preserving conversation context.
 function Accumulator:_drain_queue()
 	-- Pick the next utterance: first from queue, then fall back to the one
 	-- that triggered the original `iterate()` call (stored temporarily).
@@ -272,6 +283,11 @@ function Accumulator:_drain_queue()
 				messages = { { role = "user", content = prompt } },
 				auto_submit = true,
 				hidden = true,
+				-- Callback to capture the chat object for follow-up messages
+				on_open = vim.schedule_wrap(function(chat)
+					-- Store the chat reference so follow-ups reuse this session
+					self._cc_chat = chat
+				end),
 				callbacks = {
 					on_completed = vim.schedule_wrap(function(chat)
 						-- Extract assistant response from chat messages
@@ -339,6 +355,10 @@ end
 
 --- Update the scratchpad text and refresh the buffer.
 --- Clears accumulated partials after a successful LLM iteration.
+--- After the update, starts a 5-second delay window. Any fragments that
+--- arrive during this window are accumulated. When the timer fires, if
+--- there are pending fragments they are sent as a follow-up to the same
+--- CodeCompanion chat (preserving conversation context).
 ---@param text string  the new scratchpad content
 ---@param on_complete? fun(text: string) callback
 function Accumulator:_apply_scratchpad_update(text, on_complete)
@@ -354,12 +374,19 @@ function Accumulator:_apply_scratchpad_update(text, on_complete)
 		on_complete(text)
 	end
 
-	-- Schedule the next queued item (non-blocking, one at a time)
+	-- If there are queued items from the original queue, process them immediately
 	if self._queued and #self._queued > 0 then
 		vim.schedule(function()
 			self:_drain_queue()
 		end)
+		return
 	end
+
+	-- Start a 5-second delay window for accumulating new fragments.
+	-- If new transcripts arrive during this window they go into
+	-- _pending_fragments. When the timer fires we send them as a
+	-- follow-up to the same chat session.
+	self:_start_delay_timer()
 end
 
 --- Confirm the accumulated text: invoke the handler and apply the result.
@@ -555,6 +582,118 @@ function Accumulator:_cancel()
 	-- Clear the queue so no more utterances are processed
 	self._queued = {}
 	self._iterating = false
+	-- Clear pending fragments and stop the delay timer
+	self._pending_fragments = {}
+	self:_stop_delay_timer()
+	-- Release the chat reference so a fresh session is created next time
+	self._cc_chat = nil
+end
+
+--- Start (or restart) the post-result delay timer.
+--- When it fires, any accumulated _pending_fragments are sent as a
+--- follow-up to the existing CodeCompanion chat.
+function Accumulator:_start_delay_timer()
+	self:_stop_delay_timer()
+	self._delay_timer = vim.uv.new_timer()
+	self._delay_timer:start(5000, 0, vim.schedule_wrap(function()
+		self._delay_timer = nil
+		self:_flush_pending_fragments()
+	end))
+end
+
+--- Stop the post-result delay timer.
+function Accumulator:_stop_delay_timer()
+	if self._delay_timer then
+		self._delay_timer:stop()
+		self._delay_timer:close()
+		self._delay_timer = nil
+	end
+end
+
+--- Send accumulated _pending_fragments as a follow-up to the existing
+--- CodeCompanion chat. If no chat is available, falls back to building
+--- a fresh prompt via _drain_queue.
+function Accumulator:_flush_pending_fragments()
+	if #self._pending_fragments == 0 then
+		return
+	end
+
+	local fragments = self._pending_fragments
+	self._pending_fragments = {}
+
+	-- Combine all pending fragments into a single instruction
+	local combined = table.concat(fragments, " ")
+
+	-- Try to send as a follow-up to the existing chat
+	if self._cc_chat and self._cc_chat.send then
+		vim.notify("[outloud] scratchpad: sending follow-up to existing chat", vim.log.levels.INFO)
+		self._cc_chat:send({
+			message = combined,
+			auto_submit = true,
+			on_completed = vim.schedule_wrap(function(chat)
+				local response_text = ""
+				if chat and chat.messages then
+					for _, msg in ipairs(chat.messages) do
+						if msg.role == "llm" then
+							response_text = msg.content or ""
+						end
+					end
+				end
+				self.text = response_text
+				self:_refresh_buf()
+				-- After this follow-up, start another delay window
+				self:_start_delay_timer()
+			end),
+		})
+		return
+	end
+
+	-- No existing chat: queue the combined fragments for a fresh LLM call
+	vim.notify("[outloud] scratchpad: no existing chat, queuing fragments for fresh request", vim.log.levels.INFO)
+	if not self._queued then
+		self._queued = {}
+	end
+	self._iterating = true
+	table.insert(self._queued, { utterance = combined, on_complete = nil })
+	vim.schedule(function()
+		self:_drain_queue()
+	end)
+end
+
+--- Add a fragment to the pending accumulation buffer.
+--- If a delay timer is running (post-result window), the fragment is
+--- accumulated. Otherwise it goes into the normal queue.
+---@param utterance string
+function Accumulator:add_fragment(utterance)
+	if not utterance or utterance == "" then
+		return
+	end
+
+	-- If a delay timer is running, accumulate for the next flush
+	if self._delay_timer then
+		table.insert(self._pending_fragments, utterance)
+		-- Reset the timer so we wait 5s from the *last* fragment
+		self:_start_delay_timer()
+		return
+	end
+
+	-- No delay window: queue normally for immediate processing
+	if self._iterating then
+		if not self._queued then
+			self._queued = {}
+		end
+		table.insert(self._queued, { utterance = utterance, on_complete = nil })
+	else
+		-- Nothing in flight, kick off processing
+		self._iterating = true
+		if not self._queued then
+			self._queued = {}
+		end
+		table.insert(self._queued, { utterance = utterance, on_complete = nil })
+		vim.schedule(function()
+			self:_drain_queue()
+		end)
+	end
 end
 
 --- Check if there is accumulated text.

@@ -173,6 +173,9 @@ function M.setup(opts)
 			if M._accumulator then
 				M._accumulator:_cancel()
 			end
+			-- Stop the daemon from listening (this was missing — cancel only
+			-- cancelled the current utterance but left the mic open).
+			M._voice:stop_listening()
 			M._voice:cancel()
 			M._listening = false
 			M._start_pending = false
@@ -444,11 +447,12 @@ function M._start_pipeline()
 			V.schedule(function ()
 				local am = M.config.accumulator and M.config.accumulator.mode
 				if am == "scratchpad" then
-					-- Scratchpad mode: iterate the scratchpad with the latest utterance
-					M._accumulator:iterate(text, function (updated)
-						-- on_complete: update the sidebar with the LLM-refined text
-						M._ensure_sidebar():begin_turn(updated)
-					end)
+					-- Scratchpad mode: use add_fragment to route through
+					-- the delay timer + pending fragments system.
+					-- Fragments arriving during LLM processing or the 5s
+					-- post-result window are accumulated and sent as a
+					-- follow-up to the same chat session.
+					M._accumulator:add_fragment(text)
 				else
 					-- Classic accumulator mode: append to buffer
 					M._accumulator:append(text)

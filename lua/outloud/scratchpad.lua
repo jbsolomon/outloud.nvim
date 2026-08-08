@@ -5,6 +5,8 @@ local M = {}
 ---
 --- Uses `snacks.win` for the floating window. The window auto-updates when
 --- content changes and shows a spinner in the title while iterating.
+--- The window grows automatically when content exceeds the current height,
+--- up to a configurable maximum.
 ---
 ---@class outloud.Scratchpad
 ---@field win snacks.win?   the floating window
@@ -28,6 +30,7 @@ function Scratchpad:new(opts)
 		opts = {
 			width = opts.width or 60,
 			height = opts.height or 20,
+			max_height = opts.max_height or 40,
 			position = opts.position or "float",
 			border = opts.border or "rounded",
 		},
@@ -37,6 +40,7 @@ function Scratchpad:new(opts)
 end
 
 --- Open (or update) the scratchpad preview window.
+--- Automatically grows the window when content exceeds the current height.
 ---@param text string  the current scratchpad content
 ---@param iterating? boolean  true while LLM call is in flight
 function Scratchpad:show(text, iterating)
@@ -45,6 +49,15 @@ function Scratchpad:show(text, iterating)
 		vim.notify("[outloud] snacks.nvim not available, scratchpad preview disabled", vim.log.levels.WARN)
 		return
 	end
+
+	local lines = vim.split(text, "\n")
+	local content_height = #lines
+
+	-- Calculate the desired height: at least the default, at most max_height,
+	-- plus 2 for borders
+	local inner_height = math.max(self.opts.height, content_height)
+	inner_height = math.min(inner_height, self.opts.max_height)
+	local desired_height = inner_height + 2
 
 	local frame = SPINNER[self._tick % #SPINNER + 1]
 	local title = iterating
@@ -56,11 +69,17 @@ function Scratchpad:show(text, iterating)
 		local buf = self.win.buf
 		if buf and vim.api.nvim_buf_is_valid(buf) then
 			vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
-			vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n"))
+			vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 			vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
 		end
-		-- Update title
+
+		-- Grow the window if content exceeds current height
 		if self.win.win and vim.api.nvim_win_is_valid(self.win.win) then
+			local current_h = vim.api.nvim_win_get_height(self.win.win)
+			if desired_height > current_h then
+				vim.api.nvim_win_set_height(self.win.win, desired_height)
+			end
+			-- Update title
 			vim.api.nvim_win_set_config(self.win.win, {
 				title = title,
 				title_pos = "center",
@@ -74,7 +93,7 @@ function Scratchpad:show(text, iterating)
 	self.win = Snacks.win({
 		position = self.opts.position,
 		width = self.opts.width,
-		height = self.opts.height,
+		height = desired_height,
 		border = self.opts.border,
 		title = title,
 		title_pos = "center",
@@ -95,7 +114,7 @@ function Scratchpad:show(text, iterating)
 	-- Set initial content and buffer options
 	local buf = self.win.buf
 	if buf and vim.api.nvim_buf_is_valid(buf) then
-		vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n"))
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 		vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
 		vim.api.nvim_set_option_value("readonly", true, { buf = buf })
 	end
