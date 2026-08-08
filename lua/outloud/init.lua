@@ -77,7 +77,7 @@ Return only the updated scratch pad content. Do not include explanations or mark
 		cancel = "<leader>lc",
 		sidebar = "<leader>ll",
 		scratchpad = "<leader>lp",
-		toggle_recording = "<leader>lt"
+		accept = "<leader>lt"
 	}
 }
 
@@ -178,14 +178,13 @@ function M.setup(opts)
 
 	VK.set("n", keys.cancel, function ()
 		if M._voice and M._voice:is_running() then
-			-- Save accumulated content to register before cancelling
+			-- Yank, clear accumulator, stop mic, close preview
 			_save_to_register()
-			-- Cancel any in-flight LLM iterations so the event loop unblocks
 			if M._accumulator then
 				M._accumulator:_cancel()
+				M._accumulator:clear()
+				M._accumulator:close_preview()
 			end
-			-- Stop the daemon from listening (this was missing — cancel only
-			-- cancelled the current utterance but left the mic open).
 			M._voice:stop_listening()
 			M._voice:cancel()
 			M._listening = false
@@ -208,14 +207,17 @@ function M.setup(opts)
 	end, { desc = "outloud: toggle scratchpad preview" }
 	)
 
-	VK.set("n", keys.toggle_recording, function ()
+	VK.set("n", keys.accept, function ()
 		if not M._voice or not M._voice:is_running() then
 			V.notify("[outloud] waiting for daemon to start...", VLL.INFO)
 			return
 		end
 		if M._listening then
+			-- Done with this session: yank, clear accumulator, keep mic open
 			_save_to_register()
-			M._voice:stop_listening()
+			if M._accumulator then
+				M._accumulator:clear()
+			end
 			M._listening = false
 		elseif M._start_pending then
 			-- Start sent but not yet confirmed by the daemon: treat a second
@@ -228,7 +230,7 @@ function M.setup(opts)
 			-- daemon's "status: listening" event to confirm.
 			M._start_pending = true
 		end
-	end, { desc = "outloud: toggle recording" }
+	end, { desc = "outloud: accept" }
 	)
 end
 
@@ -438,6 +440,9 @@ function M._start_pipeline()
 	end
 
 	M._voice:on_transcript(function (text, duration_ms)
+		if not M._listening then
+			return
+		end
 		M._state = "idle"
 		ui.set_state("idle")
 		V.schedule(function ()
@@ -500,6 +505,9 @@ function M._start_pipeline()
 	end)
 
 	M._voice:on_partial(function (text)
+		if not M._listening then
+			return
+		end
 		local accum_mode = M.config.accumulator and M.config.accumulator.mode
 		if accum_enabled and M._accumulator and text ~= "" then
 			if accum_mode == "scratchpad" then

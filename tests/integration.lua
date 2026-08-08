@@ -1589,12 +1589,12 @@ local voice_mock = {
     cancel = function() end,
 }
 
--- Simulate: toggle recording ON
+-- Simulate: accept ON (start listening)
 ls._listening = false
 ls._voice = voice_mock
 ls._start_pending = false
 
--- Call the toggle_recording handler directly (simulating key press)
+-- Call the accept handler directly (simulating key press)
 ls._voice:start_listening(ls.config.audio.device)
 ls._start_pending = true
 assert_eq(ls._listening, false, "_listening stays false until daemon confirms")
@@ -1617,7 +1617,7 @@ assert_eq(ls._listening, true, "_listening stays true after transcript")
 ls._state = "idle"
 assert_eq(ls._listening, true, "_listening stays true after second transcript")
 
--- Simulate: toggle recording OFF (second press)
+-- Simulate: accept OFF (second press)
 -- This should call stop_listening and clear _listening
 voice_mock.stop_listening = function() end
 ls._voice:stop_listening()

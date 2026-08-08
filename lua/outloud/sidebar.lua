@@ -288,10 +288,10 @@ function Sidebar:_hint_line()
 	local s = self.state
 	local parts
 
-	if s == "listening" then
-		parts = { (k.toggle_recording or "<leader>lt") .. " send", (k.cancel or "<leader>lc") .. " cancel" }
-	elseif s == "ready" then
-		parts = { (k.toggle_recording or "<leader>lt") .. " record", (k.cancel or "<leader>lc") .. " cancel" }
+		if s == "listening" then
+			parts = { (k.accept or "<leader>lt") .. " accept", (k.cancel or "<leader>lc") .. " cancel" }
+		elseif s == "ready" then
+			parts = { (k.accept or "<leader>lt") .. " record", (k.cancel or "<leader>lc") .. " cancel" }
 	elseif BUSY[s] then
 		parts = { "working" }
 	else
@@ -437,7 +437,7 @@ function Sidebar:_help_lines(w)
 	local k = self.keys or {}
 	local rows = {
 		{ k.push_to_talk or "<leader>ls", "talk (starts the daemon)" },
-		{ k.toggle_recording or "<leader>lt", "toggle recording" },
+		{ k.accept or "<leader>lt", "accept (yank, clear, keep mic)" },
 		{ k.cancel or "<leader>lc", "cancel recording" },
 		{ k.sidebar or "<leader>ll", "toggle this sidebar" },
 	}
