@@ -25,7 +25,7 @@ local M = {}
 ---@field _partial_text string   raw partial text accumulated since last iteration (scratchpad mode only)
 ---@field _iterating boolean    gate to prevent concurrent LLM calls
 ---@field _scratchpad Scratchpad?  floating preview window
----@field _cc_chat table?       CodeCompanion chat object for follow-up messages
+---@field _cc_history table[]   conversation history (role/content pairs) for context in follow-ups
 ---@field _pending_fragments string[]  fragments accumulated while LLM is processing or during post-result delay
 ---@field _delay_timer userdata?  timer for the post-result accumulation delay
 local Accumulator = {}
@@ -75,7 +75,7 @@ function Accumulator:new(opts)
 		_iterating = false,
 		_augroup = nil,
 		_scratchpad = nil,
-		_cc_chat = nil,
+		_cc_history = {},
 		_pending_fragments = {},
 		_delay_timer = nil,
 	}, Accumulator)
@@ -278,16 +278,19 @@ function Accumulator:_drain_queue()
 		local ok, cc = pcall(require, "CodeCompanion")
 		if ok and cc.chat then
 			vim.notify("[outloud] scratchpad: refining with CodeCompanion", vim.log.levels.INFO)
+			-- Build messages with conversation history for context preservation
+			local messages = {}
+			-- Include previous conversation as context
+			for _, hist_msg in ipairs(self._cc_history) do
+				messages[#messages + 1] = hist_msg
+			end
+			-- Add the current instruction
+			messages[#messages + 1] = { role = "user", content = prompt }
 			cc.chat({
 				params = { adapter = handler.name },
-				messages = { { role = "user", content = prompt } },
+				messages = messages,
 				auto_submit = true,
 				hidden = true,
-				-- Callback to capture the chat object for follow-up messages
-				on_open = vim.schedule_wrap(function(chat)
-					-- Store the chat reference so follow-ups reuse this session
-					self._cc_chat = chat
-				end),
 				callbacks = {
 					on_completed = vim.schedule_wrap(function(chat)
 						-- Extract assistant response from chat messages
@@ -297,6 +300,11 @@ function Accumulator:_drain_queue()
 								if msg.role == "llm" then
 									response_text = msg.content or ""
 								end
+							end
+							-- Store conversation history for context in follow-ups
+							self._cc_history = {}
+							for _, msg in ipairs(chat.messages) do
+								self._cc_history[#self._cc_history + 1] = msg
 							end
 						end
 						self:_apply_scratchpad_update(response_text, on_complete)
@@ -560,6 +568,17 @@ function Accumulator:toggle_scratchpad()
 	self._scratchpad:toggle(self.text, self._iterating)
 end
 
+--- Copy the scratchpad content to the configured register.
+--- Called when recording stops so the user can paste with `<reg>p`.
+--- @param reg string the register name (e.g. "a", "z", "0")
+function Accumulator:to_register(reg)
+    if self.text == "" then
+        return
+    end
+    vim.fn.setreg(reg, self.text)
+    vim.notify(('[outloud] scratchpad saved to register "%s (paste with "%sp)'):format(reg, reg), vim.log.levels.INFO)
+end
+
 --- Clean up buffer and window.
 function Accumulator:dispose()
 	self:_cancel()
@@ -585,8 +604,8 @@ function Accumulator:_cancel()
 	-- Clear pending fragments and stop the delay timer
 	self._pending_fragments = {}
 	self:_stop_delay_timer()
-	-- Release the chat reference so a fresh session is created next time
-	self._cc_chat = nil
+	-- Clear conversation history so a fresh session is created next time
+	self._cc_history = {}
 end
 
 --- Start (or restart) the post-result delay timer.
@@ -610,9 +629,10 @@ function Accumulator:_stop_delay_timer()
 	end
 end
 
---- Send accumulated _pending_fragments as a follow-up to the existing
---- CodeCompanion chat. If no chat is available, falls back to building
---- a fresh prompt via _drain_queue.
+--- Send accumulated _pending_fragments as a follow-up to the LLM.
+--- Uses the conversation history from the previous chat to preserve context.
+--- Creates a new cc.chat() call (not a :send() on the old one) since that's
+--- the only API surface we know works reliably.
 function Accumulator:_flush_pending_fragments()
 	if #self._pending_fragments == 0 then
 		return
@@ -624,40 +644,62 @@ function Accumulator:_flush_pending_fragments()
 	-- Combine all pending fragments into a single instruction
 	local combined = table.concat(fragments, " ")
 
-	-- Try to send as a follow-up to the existing chat
-	if self._cc_chat and self._cc_chat.send then
-		vim.notify("[outloud] scratchpad: sending follow-up to existing chat", vim.log.levels.INFO)
-		self._cc_chat:send({
-			message = combined,
-			auto_submit = true,
-			on_completed = vim.schedule_wrap(function(chat)
-				local response_text = ""
-				if chat and chat.messages then
-					for _, msg in ipairs(chat.messages) do
-						if msg.role == "llm" then
-							response_text = msg.content or ""
+	-- Build the prompt for the follow-up instruction
+	local prompt = self:_build_scratchpad_prompt(combined)
+
+	local handler = self.opts.handler
+	if handler and handler.name then
+		local ok, cc = pcall(require, "CodeCompanion")
+		if ok and cc.chat then
+			vim.notify("[outloud] scratchpad: sending follow-up with conversation context", vim.log.levels.INFO)
+			-- Build messages with conversation history for context preservation
+			local messages = {}
+			for _, hist_msg in ipairs(self._cc_history) do
+				messages[#messages + 1] = hist_msg
+			end
+			messages[#messages + 1] = { role = "user", content = prompt }
+			cc.chat({
+				params = { adapter = handler.name },
+				messages = messages,
+				auto_submit = true,
+				hidden = true,
+				callbacks = {
+					on_completed = vim.schedule_wrap(function(chat)
+						local response_text = ""
+						if chat and chat.messages then
+							for _, msg in ipairs(chat.messages) do
+								if msg.role == "llm" then
+									response_text = msg.content or ""
+								end
+							end
+							-- Update conversation history
+							self._cc_history = {}
+							for _, msg in ipairs(chat.messages) do
+								self._cc_history[#self._cc_history + 1] = msg
+							end
 						end
-					end
-				end
-				self.text = response_text
-				self:_refresh_buf()
-				-- After this follow-up, start another delay window
-				self:_start_delay_timer()
-			end),
-		})
-		return
+						self.text = response_text
+						self:_refresh_buf()
+						-- After this follow-up, start another delay window
+						self:_start_delay_timer()
+					end),
+					on_error = vim.schedule_wrap(function(_, err_msg)
+						vim.notify("[outloud] CodeCompanion follow-up error: " .. tostring(err_msg or "unknown"), vim.log.levels.WARN)
+						-- On error, just append the raw fragments
+						self.text = self.text ~= "" and (self.text .. "\n" .. combined) or combined
+						self:_refresh_buf()
+						self:_start_delay_timer()
+					end),
+				},
+			})
+			return
+		end
 	end
 
-	-- No existing chat: queue the combined fragments for a fresh LLM call
-	vim.notify("[outloud] scratchpad: no existing chat, queuing fragments for fresh request", vim.log.levels.INFO)
-	if not self._queued then
-		self._queued = {}
-	end
-	self._iterating = true
-	table.insert(self._queued, { utterance = combined, on_complete = nil })
-	vim.schedule(function()
-		self:_drain_queue()
-	end)
+	-- No handler or CodeCompanion unavailable: plain-text fallback
+	self.text = self.text ~= "" and (self.text .. "\n" .. combined) or combined
+	self:_refresh_buf()
+	self:_start_delay_timer()
 end
 
 --- Add a fragment to the pending accumulation buffer.

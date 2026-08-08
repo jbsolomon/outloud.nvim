@@ -15,7 +15,7 @@ local M = {}
 ---@field backend?    string                                                                                                                                                                                                        "whisper" (default) or "openai" (OpenAI-compatible)
 ---@field model       { size?: string, path?: string, hf_repo?: string, server_port: number, server_url?: string }
 ---@field audio       { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean, device?: string }
----@field accumulator { enabled: boolean, mode: string, handler?: table, context: table }
+---@field accumulator { enabled: boolean, mode: string, handler?: table, context: table, register: string }
 ---@field ui          { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
 ---@field keys        { push_to_talk: string, cancel: string, sidebar: string }
 ---@field daemon_cmd? string
@@ -44,6 +44,7 @@ M.defaults = {
 		enabled = false,
 		mode = "hidden", -- "hidden" | "preview"
 		handler = nil,   -- { name = "default" } for CodeCompanion, or { fn = function(text, context) ... end }
+		register = "ol", -- named register to save scratchpad content to on stop
 		context = {
 			buffer = true,
 			selection = true,
@@ -167,8 +168,18 @@ function M.setup(opts)
 	end, { desc = "outloud: open" }
 	)
 
+	--- Save accumulated content to register.
+	local function _save_to_register()
+		if M._accumulator then
+			local reg = M.config.accumulator and M.config.accumulator.register or "ol"
+			M._accumulator:to_register(reg)
+		end
+	end
+
 	VK.set("n", keys.cancel, function ()
 		if M._voice and M._voice:is_running() then
+			-- Save accumulated content to register before cancelling
+			_save_to_register()
 			-- Cancel any in-flight LLM iterations so the event loop unblocks
 			if M._accumulator then
 				M._accumulator:_cancel()
@@ -203,6 +214,7 @@ function M.setup(opts)
 			return
 		end
 		if M._listening then
+			_save_to_register()
 			M._voice:stop_listening()
 			M._listening = false
 		elseif M._start_pending then
@@ -655,6 +667,9 @@ function M.stop()
 	end
 
 	if M._accumulator then
+		-- Save accumulated text to register before disposing
+		local reg = M.config.accumulator and M.config.accumulator.register or "ol"
+		M._accumulator:to_register(reg)
 		M._accumulator:dispose()
 		M._accumulator = nil
 	end

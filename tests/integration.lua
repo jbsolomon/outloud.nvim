@@ -1603,6 +1603,24 @@ vim.api.nvim_win_set_config = function(win_id, config)
 	return orig_win_set_config(win_id, config)
 end
 
+-- Override nvim_win_get_height / nvim_win_set_height for mock window
+local orig_win_get_height = vim.api.nvim_win_get_height
+local mock_win_height = 22  -- initial height
+vim.api.nvim_win_get_height = function(win_id)
+	if win_id == mock_float_win then
+		return mock_win_height
+	end
+	return orig_win_get_height(win_id)
+end
+local orig_win_set_height = vim.api.nvim_win_set_height
+vim.api.nvim_win_set_height = function(win_id, height)
+	if win_id == mock_float_win then
+		mock_win_height = height
+		return
+	end
+	return orig_win_set_height(win_id, height)
+end
+
 -- Re-define spinner frames locally (mirrors scratchpad.lua)
 local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
