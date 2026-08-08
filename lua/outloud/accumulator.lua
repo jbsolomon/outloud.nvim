@@ -278,7 +278,7 @@ function Accumulator:_drain_queue()
 						local response_text = ""
 						if chat and chat.messages then
 							for _, msg in ipairs(chat.messages) do
-								if msg.role == "assistant" then
+								if msg.role == "llm" then
 									response_text = msg.content or ""
 								end
 							end
@@ -391,7 +391,7 @@ function Accumulator:confirm(on_complete)
 						local result_text = ""
 						if chat and chat.messages then
 							for _, msg in ipairs(chat.messages) do
-								if msg.role == "assistant" then
+								if msg.role == "llm" then
 									result_text = msg.content or ""
 								end
 							end

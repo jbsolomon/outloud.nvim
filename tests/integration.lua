@@ -1323,7 +1323,7 @@ local mock_cc = {
         if captured_chat_callback then
             captured_chat_callback({
                 messages = {
-                    { role = "assistant", content = "refined scratchpad content" }
+                    { role = "llm", content = "refined scratchpad content" }
                 }
             })
         end
@@ -1349,6 +1349,7 @@ local _cc_result, _cc_ok = await_cb(function(cb)
     end)
 end)
 assert_ok(_cc_ok, "iterate callback fired for CodeCompanion test")
+assert_eq(_cc_result, "refined scratchpad content", "iterate response correctly extracted from llm role")
 
 -- Verify the accumulator called CodeCompanion.chat (not some other API)
 assert_ok(captured_chat_args ~= nil, "iterate with handler.name calls CodeCompanion.chat")
@@ -1418,9 +1419,41 @@ assert_ok(captured_chat_args ~= nil, "confirm with handler.name calls CodeCompan
 assert_type(captured_chat_args.params, "table", "confirm chat args has params table")
 assert_type(captured_chat_args.messages, "table", "confirm chat args has messages array")
 assert_type(captured_chat_args.callbacks, "table", "confirm chat args has callbacks table")
+assert_eq(confirm_result, "refined scratchpad content", "confirm response correctly extracted from llm role")
 
 cc_confirm_acc:dispose()
 vim.api.nvim_buf_delete(confirm_buf, { force = true })
+
+-- Test error path: CodeCompanion calls on_error, accumulator falls back to direct merge
+captured_chat_args = nil
+local error_cc = {
+    chat = function(args)
+        captured_chat_args = args
+        local error_cb = args.callbacks and args.callbacks.on_error
+        if error_cb then
+            error_cb(nil, "connection timeout")
+        end
+    end,
+}
+
+package.loaded["CodeCompanion"] = error_cc
+
+local error_acc = Accumulator:new({
+    mode = "scratchpad",
+    handler = { name = "local-llama.cpp" },
+})
+error_acc.text = "refined content from previous iteration"
+
+local error_result, error_ok = await_cb(function(cb)
+    error_acc:iterate("add something", function(text)
+        cb(text)
+    end)
+end)
+assert_ok(error_ok, "error fallback callback fired")
+assert_eq(error_result, "refined content from previous iteration\nadd something", "error fallback appends utterance to existing scratchpad")
+assert_eq(error_acc._iterating, false, "gate is clear after error fallback")
+
+error_acc:dispose()
 
 -- Restore original CodeCompanion
 package.loaded["CodeCompanion"] = original_cc
