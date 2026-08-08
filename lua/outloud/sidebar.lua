@@ -381,23 +381,15 @@ end
 
 -- Entry rendering ------------------------------------------------------
 
---- A framed block: rounded border with a left title and optional right label.
----@param title string
----@param right string
----@param body string
+--- A simple timestamped line: "12:34 text..."
+---@param text string
+---@param time string
 ---@param w number
 ---@return string[]
-local function box(title, right, body, w)
-	local inner = math.max(4, w - 4)
-	local left_cap = "╭─ " .. title .. " "
-	local right_cap = right ~= "" and (" " .. right .. " ─╮") or "─╮"
-	local fill = math.max(0, w - dw(left_cap) - dw(right_cap))
-	local lines = { left_cap .. string.rep("─", fill) .. right_cap }
-	for _, l in ipairs(wrap(body, inner)) do
-		lines[#lines + 1] = "│ " .. fit(l, inner) .. " │"
-	end
-	lines[#lines + 1] = "╰" .. string.rep("─", math.max(0, w - 2)) .. "╯"
-	return lines
+local function label(text, time, w)
+	local stamp = time and ("%s "):format(time) or ""
+	local content = stamp .. (text or "")
+	return wrap(content, w)
 end
 
 --- A bulleted block: marker line plus an indented body.
@@ -422,9 +414,9 @@ function Sidebar:_entry_lines(e, w)
 	local out
 
 	if e.kind == "turn" then
-		out = box("you", e.time or "", e.text or "", w)
+		out = label(e.text or "", e.time or "", w)
 	elseif e.kind == "partial" then
-		out = box("you", "…", e.text or "", w)
+		out = label(e.text or "", "…", w)
 	elseif e.kind == "error" then
 		out = bullet("⏺ ! error", e.text, w)
 	elseif e.kind == "note" then
@@ -568,6 +560,34 @@ function Sidebar:_render_entry(i)
 	self:_highlight(e._start, el)
 end
 
+--- Trim entries to keep only the last MAX_TURNS turn entries.
+--- Partials and errors are not counted against the limit.
+local MAX_TURNS = 5
+
+function Sidebar:_trim_turns()
+	local turn_count = 0
+	for _, e in ipairs(self.entries) do
+		if e and e.kind == "turn" then
+			turn_count = turn_count + 1
+		end
+	end
+	local drop = turn_count - MAX_TURNS
+	if drop <= 0 then
+		return
+	end
+	-- Remove entries from the front until we've dropped enough turns
+	local dropped_turns = 0
+	while dropped_turns < drop and #self.entries > 0 do
+		local e = self.entries[1]
+		if e and e.kind == "turn" then
+			dropped_turns = dropped_turns + 1
+		end
+		table.remove(self.entries, 1)
+	end
+	-- Offsets are now stale, force a full re-render
+	self:_render_all()
+end
+
 --- Append an entry and render it.
 ---@param e table
 ---@return number index
@@ -575,6 +595,13 @@ function Sidebar:_push(e)
 	self:_ensure_buf()
 	local was_empty = #self.entries == 0
 	self.entries[#self.entries + 1] = e
+
+	-- Trim old turns if we exceed the limit (this also re-renders)
+	if e.kind == "turn" then
+		self:_trim_turns()
+		return #self.entries
+	end
+
 	if was_empty and not self.show_help then
 		self:_render_all()
 		return 1

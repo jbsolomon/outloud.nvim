@@ -169,6 +169,10 @@ function M.setup(opts)
 
 	VK.set("n", keys.cancel, function ()
 		if M._voice and M._voice:is_running() then
+			-- Cancel any in-flight LLM iterations so the event loop unblocks
+			if M._accumulator then
+				M._accumulator:_cancel()
+			end
 			M._voice:cancel()
 			M._listening = false
 			M._start_pending = false
@@ -424,17 +428,27 @@ function M._start_pipeline()
 		M._listening = false
 		V.schedule(function ()
 			local sb = M._ensure_sidebar()
-			sb:begin_turn(text)
-			sb:set_state("idle")
+			local accum_mode = M.config.accumulator and M.config.accumulator.mode
+			if accum_enabled and M._accumulator and accum_mode == "scratchpad" then
+				-- Scratchpad mode: the scratchpad floating window is the surface;
+				-- do NOT also log to the sidebar (avoids utterance duplication).
+				sb:set_state("idle")
+			else
+				sb:begin_turn(text)
+				sb:set_state("idle")
+			end
 		end)
 
 		if accum_enabled and M._accumulator then
 			-- Accumulator mode: add final transcript to accumulator
 			V.schedule(function ()
-				local accum_mode = M.config.accumulator and M.config.accumulator.mode
-				if accum_mode == "scratchpad" then
+				local am = M.config.accumulator and M.config.accumulator.mode
+				if am == "scratchpad" then
 					-- Scratchpad mode: iterate the scratchpad with the latest utterance
-					M._accumulator:iterate(text)
+					M._accumulator:iterate(text, function (updated)
+						-- on_complete: update the sidebar with the LLM-refined text
+						M._ensure_sidebar():begin_turn(updated)
+					end)
 				else
 					-- Classic accumulator mode: append to buffer
 					M._accumulator:append(text)
@@ -614,6 +628,10 @@ end
 --- VimLeavePre so quitting Neovim never strands a background process.
 function M.stop()
 	M._starting = false
+	-- Cancel any in-flight LLM iterations before tearing down
+	if M._accumulator then
+		M._accumulator:_cancel()
+	end
 	if M._voice then
 		pcall(function ()
 			M._voice:stop()

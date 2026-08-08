@@ -206,7 +206,9 @@ end
 --- state and the latest instruction, and returns the revised scratch pad.
 ---
 --- If an LLM call is already in flight (_iterating gate), the utterance is
---- queued and will be processed after the current call completes.
+--- queued and will be processed after the current call completes. Only one
+--- queued item is ever dispatched at a time, and each is scheduled via
+--- vim.schedule so the Neovim event loop stays responsive.
 ---@param utterance string  the latest transcript chunk
 ---@param on_complete? fun(text: string) callback with the updated scratchpad text
 function Accumulator:iterate(utterance, on_complete)
@@ -216,7 +218,6 @@ function Accumulator:iterate(utterance, on_complete)
 
 	-- If already iterating, queue the utterance for after the current call
 	if self._iterating then
-		-- Store the utterance and callback for deferred processing
 		if not self._queued then
 			self._queued = {}
 		end
@@ -225,7 +226,40 @@ function Accumulator:iterate(utterance, on_complete)
 	end
 
 	self._iterating = true
+	-- Push the initial utterance onto the queue so _drain_queue can pick it up
+	if not self._queued then
+		self._queued = {}
+	end
+	table.insert(self._queued, { utterance = utterance, on_complete = on_complete })
+	vim.schedule(function()
+		self:_drain_queue()
+	end)
+end
+
+--- Dispatch the next item from the queue (or the current utterance if the
+--- queue is empty). Called from `iterate()` and recursively from
+--- `_apply_scratchpad_update` — always via vim.schedule so the event loop
+--- stays responsive between LLM calls.
+function Accumulator:_drain_queue()
+	-- Pick the next utterance: first from queue, then fall back to the one
+	-- that triggered the original `iterate()` call (stored temporarily).
+	local item
+	if self._queued and #self._queued > 0 then
+		item = table.remove(self._queued, 1)
+	end
+
+	-- If nothing to process, clear the gate and return
+	if not item then
+		self._iterating = false
+		return
+	end
+
+	local utterance = item.utterance
+	local on_complete = item.on_complete
 	local prompt = self:_build_scratchpad_prompt(utterance)
+
+	-- Update scratchpad preview immediately so user sees "refining" state
+	self:_refresh_buf()
 
 	-- Try CodeCompanion first if handler.name is set
 	local handler = self.opts.handler
@@ -239,7 +273,7 @@ function Accumulator:iterate(utterance, on_complete)
 				auto_submit = true,
 				hidden = true,
 				callbacks = {
-					on_completed = function(chat)
+					on_completed = vim.schedule_wrap(function(chat)
 						-- Extract assistant response from chat messages
 						local response_text = ""
 						if chat and chat.messages then
@@ -250,11 +284,19 @@ function Accumulator:iterate(utterance, on_complete)
 							end
 						end
 						self:_apply_scratchpad_update(response_text, on_complete)
-					end,
+					end),
+					-- If the adapter errors out, fall through to plain-text merge
+					on_error = vim.schedule_wrap(function(_, err_msg)
+						vim.notify("[outloud] CodeCompanion error: " .. tostring(err_msg or "unknown"), vim.log.levels.WARN)
+						-- Fall through to plain-text merge below
+						self:_fallback_merge(utterance, on_complete)
+					end),
 				},
 			})
 			return
 		end
+		-- CodeCompanion not available
+		vim.notify("[outloud] CodeCompanion not available, falling back to direct merge", vim.log.levels.WARN)
 	end
 
 	-- Custom function handler
@@ -266,36 +308,33 @@ function Accumulator:iterate(utterance, on_complete)
 		end
 	end
 
-	-- No handler — fall back to merging partials + utterance into scratchpad text
-	if self.mode == "scratchpad" then
-		local combined = self._partial_text ~= "" and (self._partial_text .. " " .. utterance) or utterance
-		self.text = self.text ~= "" and (self.text .. "\n" .. combined) or combined
-		self._partial_text = ""
-		self:_refresh_buf()
-	else
-		self:append(utterance)
-	end
+	-- No handler — fall back to plain-text merge
+	self:_fallback_merge(utterance, on_complete)
+end
+
+--- Fallback: merge partials + utterance directly into scratchpad text
+--- without an LLM call (no handler configured, or handler failed).
+---@param utterance string
+---@param on_complete? fun(text: string)
+function Accumulator:_fallback_merge(utterance, on_complete)
+	local combined = self._partial_text ~= "" and (self._partial_text .. " " .. utterance) or utterance
+	self.text = self.text ~= "" and (self.text .. "\n" .. combined) or combined
+	self._partial_text = ""
+
 	if on_complete then
 		on_complete(self.text)
 	end
+
 	self._iterating = false
-end
+	self:_refresh_buf()
 
---- Apply the LLM's response to the scratchpad buffer.
---- Called after CodeCompanion returns.
----@param response any  raw response from CodeCompanion
----@param utterance string  the utterance that triggered this iteration
----@param on_complete? fun(text: string) callback
-function Accumulator:_apply_scratchpad_response(response, utterance, on_complete)
-	local result_text = response and response.text or response or ""
-	if type(result_text) == "table" then
-		result_text = table.concat(result_text, "\n")
+	-- _fallback_merge is called directly from _drain_queue (not via
+	-- _apply_scratchpad_update), so it must schedule the next drain itself.
+	if self._queued and #self._queued > 0 then
+		vim.schedule(function()
+			self:_drain_queue()
+		end)
 	end
-
-	-- Trim whitespace for clean scratchpad content
-	result_text = result_text:gsub("^%s*(.-)%s*$", "%1")
-
-	self:_apply_scratchpad_update(result_text, on_complete)
 end
 
 --- Update the scratchpad text and refresh the buffer.
@@ -315,18 +354,10 @@ function Accumulator:_apply_scratchpad_update(text, on_complete)
 		on_complete(text)
 	end
 
-	-- Process any queued utterances
+	-- Schedule the next queued item (non-blocking, one at a time)
 	if self._queued and #self._queued > 0 then
-		-- Process them in order, but only trigger one at a time
-		local next = table.remove(self._queued, 1)
-		-- Schedule the next iteration to avoid stack overflow
 		vim.schedule(function()
-			self:iterate(next.utterance, next.on_complete)
-			-- Process remaining queued items
-			while self._queued and #self._queued > 0 do
-				local item = table.remove(self._queued, 1)
-				self:iterate(item.utterance, item.on_complete)
-			end
+			self:_drain_queue()
 		end)
 	end
 end
@@ -504,6 +535,7 @@ end
 
 --- Clean up buffer and window.
 function Accumulator:dispose()
+	self:_cancel()
 	self:close_preview()
 	if self._scratchpad then
 		self._scratchpad:dispose()
@@ -515,6 +547,14 @@ function Accumulator:dispose()
 	self.buf = nil
 	self.chunks = {}
 	self.text = ""
+end
+
+--- Cancel any in-flight LLM iteration and discard the queue.
+--- Called when the user stops transcription or disposes the accumulator.
+function Accumulator:_cancel()
+	-- Clear the queue so no more utterances are processed
+	self._queued = {}
+	self._iterating = false
 end
 
 --- Check if there is accumulated text.

@@ -52,6 +52,39 @@ local function section(name)
   print(string.format("\n=== %s ===", name))
 end
 
+--- Yield to the event loop until a callback fires (or timeout).
+--- Returns the value(s) passed to the callback, or nil on timeout.
+--- Usage: local result = await_cb(function(cb) acc:iterate("text", cb) end)
+local function await_cb(fn, timeout_ms)
+  timeout_ms = timeout_ms or 500
+  local resolved = false
+  local result = nil
+
+  fn(function(...) -- the callback the test will await
+    resolved = true
+    result = { ... }
+  end)
+
+  -- Spin the event loop until resolved or timeout
+  local now_ms = math.floor(vim.loop.hrtime() / 1e6)
+  local deadline = now_ms + timeout_ms
+  while not resolved and math.floor(vim.loop.hrtime() / 1e6) < deadline do
+    vim.wait(10, nil, 10) -- yield to event loop in small ticks
+  end
+
+  if not resolved then
+    return nil, false
+  end
+
+  if #result == 0 then
+    return nil, true
+  elseif #result == 1 then
+    return result[1], true
+  else
+    return unpack(result), true
+  end
+end
+
 print("outloud.nvim integration test")
 print(string.rep("=", 45))
 
@@ -1171,10 +1204,10 @@ assert_ok(sp_prompt2:find("add more"), "prompt contains new instruction")
 
 -- Test iterate with no handler (falls back to direct append)
 sp:clear()
-local iter_result = nil
-sp:iterate("test utterance", function(text)
-	iter_result = text
+local iter_result, iter_ok = await_cb(function(cb)
+	sp:iterate("test utterance", cb)
 end)
+assert_ok(iter_ok, "iterate callback fired")
 assert_eq(iter_result, "test utterance", "iterate with no handler falls back to append")
 assert_eq(sp._iterating, false, "gate is clear after iterate with no handler")
 
@@ -1194,28 +1227,28 @@ local sp_handler = Accumulator:new({
 })
 
 -- First iteration (empty scratchpad, no partials)
-local result1 = nil
-sp_handler:iterate("write a function", function(text)
-	result1 = text
+local result1, ok1 = await_cb(function(cb)
+	sp_handler:iterate("write a function", cb)
 end)
+assert_ok(ok1, "first iteration callback fired")
 assert_eq(result1, "LLM transformed: write a function", "first iteration transforms utterance")
 assert_eq(sp_handler.text, "LLM transformed: write a function", "scratchpad text updated")
 assert_eq(sp_handler._iterating, false, "gate is clear after first iteration")
 assert_eq(sp_handler._partial_text, "", "partials cleared after iteration")
 
 -- Second iteration (scratchpad has content)
-local result2 = nil
-sp_handler:iterate("add error handling", function(text)
-	result2 = text
+local result2, ok2 = await_cb(function(cb)
+	sp_handler:iterate("add error handling", cb)
 end)
+assert_ok(ok2, "second iteration callback fired")
 assert_eq(result2, "LLM transformed: write a function + add error handling", "second iteration appends to scratchpad")
 assert_eq(sp_handler.text, "LLM transformed: write a function + add error handling", "scratchpad text updated again")
 
 -- Third iteration (simulating "delete that line")
-local result3 = nil
-sp_handler:iterate("remove the error handling part", function(text)
-	result3 = text
+local result3, ok3 = await_cb(function(cb)
+	sp_handler:iterate("remove the error handling part", cb)
 end)
+assert_ok(ok3, "third iteration callback fired")
 assert_eq(result3, "LLM transformed: write a function + add error handling + remove the error handling part", "third iteration continues building")
 
 sp_handler:dispose()
@@ -1251,12 +1284,12 @@ assert_eq(#queue_acc._queued, 2, "two items queued")
 
 -- Clear the gate and process first queued item
 queue_acc._iterating = false
-local first_result = nil
-queue_acc:iterate("utterance C", function(text)
-	first_result = text
+local first_result, first_ok = await_cb(function(cb)
+	queue_acc:iterate("utterance C", cb)
 end)
--- After processing C, the queue should have been processed
-assert_eq(first_result, " | utterance C", "first unqueued item processed")
+assert_ok(first_ok, "queued iterate callback fired")
+-- _drain_queue processes C first (pushed last), then A and B from queue
+assert_eq(first_result, " | utterance A | utterance B | utterance C", "all queued items processed")
 
 queue_acc:dispose()
 sp:dispose()
@@ -1286,6 +1319,14 @@ local mock_cc = {
         captured_chat_args = args
         -- Capture the callback (if any)
         captured_chat_callback = args.callbacks and args.callbacks.on_completed
+        -- Simulate a successful LLM response immediately
+        if captured_chat_callback then
+            captured_chat_callback({
+                messages = {
+                    { role = "assistant", content = "refined scratchpad content" }
+                }
+            })
+        end
     end,
 }
 
@@ -1301,9 +1342,13 @@ local cc_iterate_acc = Accumulator:new({
 cc_iterate_acc:append("existing scratchpad content")
 
 local iterate_complete_called = false
-cc_iterate_acc:iterate("add a new function", function(text)
-    iterate_complete_called = true
+local _cc_result, _cc_ok = await_cb(function(cb)
+    cc_iterate_acc:iterate("add a new function", function(text)
+        iterate_complete_called = true
+        cb(text)
+    end)
 end)
+assert_ok(_cc_ok, "iterate callback fired for CodeCompanion test")
 
 -- Verify the accumulator called CodeCompanion.chat (not some other API)
 assert_ok(captured_chat_args ~= nil, "iterate with handler.name calls CodeCompanion.chat")
@@ -1345,15 +1390,6 @@ else
     assert_ok(false, "message contains the utterance (messages is nil)")
 end
 
--- Simulate the callback being called with a chat object that has the response
-local mock_chat = {
-    messages = {
-        { role = "assistant", content = "refined scratchpad content" }
-    }
-}
-if captured_chat_callback then
-    captured_chat_callback(mock_chat)
-end
 assert_ok(iterate_complete_called, "on_completed callback was called")
 assert_eq(cc_iterate_acc._iterating, false, "gate is clear after callback")
 
@@ -1395,11 +1431,14 @@ local fallback_acc = Accumulator:new({
     handler = { name = "some-adapter" },
 })
 fallback_acc:append("fallback text")
-local fallback_result = nil
-fallback_acc:iterate("utterance", function(text)
-    fallback_result = text
+local fallback_result, fallback_ok = await_cb(function(cb)
+    fallback_acc:iterate("utterance", function(text)
+        fallback_result = text
+        cb(text)
+    end)
 end)
-assert_eq(fallback_result, "fallback text utterance", "missing CodeCompanion falls back to direct append")
+assert_ok(fallback_ok, "fallback iterate callback fired")
+assert_eq(fallback_result, "fallback text\nutterance", "missing CodeCompanion falls back to direct append")
 
 fallback_acc:dispose()
 
