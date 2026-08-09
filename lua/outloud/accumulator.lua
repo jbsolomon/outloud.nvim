@@ -29,6 +29,7 @@ local M = {}
 ---@field _pending_instruction string?  instruction currently being processed by LLM (for error fallback)
 ---@field _pending_fragments string[]  fragments accumulated while LLM is processing or during post-result delay
 ---@field _delay_timer userdata?  timer for the post-result accumulation delay
+---@field _silence_timer userdata?  timer for silence-based flush (1s pause triggers refinement)
 local Accumulator = {}
 Accumulator.__index = Accumulator
 
@@ -81,6 +82,7 @@ function Accumulator:new(opts)
 		_pending_instruction = nil,
 		_pending_fragments = {},
 		_delay_timer = nil,
+		_silence_timer = nil,
 	}, Accumulator)
 end
 
@@ -627,9 +629,10 @@ function Accumulator:_cancel()
 	-- Clear the queue so no more utterances are processed
 	self._queued = {}
 	self._iterating = false
-	-- Clear pending fragments and stop the delay timer
+	-- Clear pending fragments and stop all timers
 	self._pending_fragments = {}
 	self:_stop_delay_timer()
+	self:_stop_silence_timer()
 	-- Clear the chat object so a fresh session is created next time
 	self._cc_chat = nil
 	self._pending_instruction = nil
@@ -656,19 +659,51 @@ function Accumulator:_stop_delay_timer()
 	end
 end
 
+--- Start (or restart) the silence timer.
+--- When it fires (1 second of no new fragments), if there are pending
+--- unrefined segments and no refinement is in progress, flush them.
+function Accumulator:_start_silence_timer()
+	self:_stop_silence_timer()
+	self._silence_timer = vim.uv.new_timer()
+	self._silence_timer:start(1000, 0, vim.schedule_wrap(function()
+		self._silence_timer = nil
+		-- Only flush if idle (no refinement in flight) and we have pending fragments
+		if not self._iterating and #self._pending_fragments > 0 then
+			self:_flush_pending_fragments()
+		end
+	end))
+end
+
+--- Stop the silence timer.
+function Accumulator:_stop_silence_timer()
+	if self._silence_timer then
+		self._silence_timer:stop()
+		self._silence_timer:close()
+		self._silence_timer = nil
+	end
+end
+
 --- Send accumulated _pending_fragments as a follow-up to the LLM.
 --- Reuses the existing CodeCompanion chat session via `chat:send()` to
 --- avoid session proliferation.
+--- Stops the silence timer since we're acting on the pending fragments.
 function Accumulator:_flush_pending_fragments()
 	if #self._pending_fragments == 0 then
 		return
 	end
+	-- Stop the silence timer — we're processing the pending fragments now
+	self:_stop_silence_timer()
 
 	local fragments = self._pending_fragments
 	self._pending_fragments = {}
 
 	-- Combine all pending fragments into a single instruction
 	local combined = table.concat(fragments, " ")
+
+	-- Don't send an empty instruction — nothing meaningful to refine
+	if combined == "" or combined:match("^%s+$") then
+		return
+	end
 
 	-- Build the prompt for the follow-up instruction
 	local prompt = self:_build_scratchpad_prompt(combined)
@@ -731,9 +766,20 @@ end
 --- accumulated UNLESS it matches an immediate trigger keyword — in which
 --- case the pending fragments are flushed right away.
 --- Otherwise it goes into the normal queue.
+---
+--- An empty fragment is never accumulated; instead, if there are pending
+--- unrefined segments and no refinement is in progress, it triggers an
+--- immediate flush.
 ---@param utterance string
 function Accumulator:add_fragment(utterance)
+	-- Empty fragment: signal to flush pending segments if idle
 	if not utterance or utterance == "" then
+		if not self._iterating and #self._pending_fragments > 0 then
+			self:_stop_silence_timer()
+			vim.schedule(function()
+				self:_flush_pending_fragments()
+			end)
+		end
 		return
 	end
 
@@ -751,8 +797,10 @@ function Accumulator:add_fragment(utterance)
 				self:_flush_pending_fragments()
 			end)
 		else
-			-- Reset the timer so we wait 5s from the *last* fragment
+			-- Reset the 5s delay timer so we wait from the *last* fragment
 			self:_start_delay_timer()
+			-- Also reset the 1s silence timer
+			self:_start_silence_timer()
 		end
 		return
 	end
