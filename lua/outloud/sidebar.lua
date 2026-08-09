@@ -24,6 +24,7 @@ local M = {}
 ---@field turns number
 ---@field _timer userdata?
 ---@field _tick number
+---@field _error_message string?
 local Sidebar = {}
 Sidebar.__index = Sidebar
 
@@ -212,6 +213,7 @@ function Sidebar:new(opts)
 		turns = 0,
 		_timer = nil,
 		_tick = 0,
+		_error_message = nil,
 	}, Sidebar)
 end
 
@@ -348,10 +350,18 @@ function Sidebar:_render_header()
 	end
 	local phase_line = (" %s %s"):format(mark, label)
 
+	-- Error line: shown in row 2, replacing hints when an error is active
+	local hint_or_error
+	if self._error_message and self._error_message ~= "" then
+		hint_or_error = " ✗ " .. self._error_message
+	else
+		hint_or_error = " " .. self:_hint_line()
+	end
+
 	self:_write(0, HEADER_H, {
 		fit(signal_line, w),
 		fit(phase_line, w),
-		fit(" " .. self:_hint_line(), w),
+		fit(hint_or_error, w),
 		string.rep("─", math.max(4, w)),
 	})
 
@@ -367,11 +377,20 @@ function Sidebar:_render_header()
 		end_col = 0,
 		hl_group = "OutloudPhase",
 	})
-	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 2, 0, {
-		end_row = 3,
-		end_col = 0,
-		hl_group = "OutloudHint",
-	})
+	-- Highlight error line in row 2 when active, otherwise hint
+	if self._error_message and self._error_message ~= "" then
+		pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 2, 0, {
+			end_row = 3,
+			end_col = 0,
+			hl_group = "OutloudFail",
+		})
+	else
+		pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 2, 0, {
+			end_row = 3,
+			end_col = 0,
+			hl_group = "OutloudHint",
+		})
+	end
 	pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, 3, 0, {
 		end_row = 4,
 		end_col = 0,
@@ -575,16 +594,17 @@ function Sidebar:_trim_turns()
 	if drop <= 0 then
 		return
 	end
-	-- Remove entries from the front until we've dropped enough turns
-	local dropped_turns = 0
-	while dropped_turns < drop and #self.entries > 0 do
-		local e = self.entries[1]
-		if e and e.kind == "turn" then
-			dropped_turns = dropped_turns + 1
+	-- Drop the oldest final transcripts, but leave partial lines alone.
+	local dropped = 0
+	local i = 1
+	while dropped < drop and i <= #self.entries do
+		if self.entries[i] and self.entries[i].kind == "turn" then
+			table.remove(self.entries, i)
+			dropped = dropped + 1
+		else
+			i = i + 1
 		end
-		table.remove(self.entries, 1)
 	end
-	-- Offsets are now stale, force a full re-render
 	self:_render_all()
 end
 
@@ -684,28 +704,53 @@ end
 
 -- Conversation ---------------------------------------------------------
 
---- Show the interim transcript as a provisional box, replaced by `begin_turn`.
+--- Keep only the last MAX_PARTIALS partial lines in the sidebar.
+local MAX_PARTIALS = 5
+
+function Sidebar:_trim_partials()
+	-- Count how many partial lines exist
+	local count = 0
+	for _, e in ipairs(self.entries) do
+		if e and e.kind == "partial" then count = count + 1 end
+	end
+	local drop = count - MAX_PARTIALS
+	if drop <= 0 then return end
+	-- Drop the oldest partial lines from the top
+	local removed = 0
+	while removed < drop and #self.entries > 0 do
+		if self.entries[1] and self.entries[1].kind == "partial" then
+			table.remove(self.entries, 1)
+			removed = removed + 1
+		else
+			break -- stop at first non-partial
+		end
+	end
+end
+
+--- Add a partial transcript line to the sidebar (up to 5 visible).
 ---@param text string
 function Sidebar:set_partial(text)
 	if text == nil or text == "" then
 		return
 	end
 	self:_ensure_buf()
-	local i = #self.entries
-	if self.entries[i] and self.entries[i].kind == "partial" then
-		self.entries[i].text = text
-		self:_render_entry(i)
-	else
-		self.open_kind = nil
-		self:_push({ kind = "partial", text = text })
-	end
+	self.open_kind = nil
+	self:_trim_partials()
+	self:_push({ kind = "partial", text = text })
+	self:_render_all()
 end
 
+--- Remove all partial transcript lines (replaced by the final transcript).
 function Sidebar:clear_partial()
-	local e = self.entries[#self.entries]
-	if e and e.kind == "partial" then
-		self:_pop()
+	local i = 1
+	while i <= #self.entries do
+		if self.entries[i] and self.entries[i].kind == "partial" then
+			table.remove(self.entries, i)
+		else
+			i = i + 1
+		end
 	end
+	self:_render_all()
 end
 
 ---@param transcript string
@@ -719,8 +764,16 @@ end
 
 ---@param message string
 function Sidebar:add_error(message)
-	self.open_kind = nil
-	self:_push({ kind = "error", text = message })
+	self._error_message = message
+	self:_render_header()
+end
+
+--- Clear the header error when status recovers.
+function Sidebar:clear_error()
+	if self._error_message then
+		self._error_message = nil
+		self:_render_header()
+	end
 end
 
 ---@param stop_reason? string

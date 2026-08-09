@@ -458,10 +458,13 @@ assert_eq(last.kind, "turn", "last entry is a turn")
 assert_eq(last.text, "hello world this is a test", "turn text is correct")
 assert_type(last.time, "string", "turn has a time stamp")
 
--- Simulate an error
+-- Simulate an error (now stored in _error_message, not as an entry)
 conv:add_error("simulated error message")
-last = conv.entries[#conv.entries]
-assert_eq(last.kind, "error", "error entry added")
+assert_eq(conv._error_message, "simulated error message", "error message stored in header")
+
+-- Clear error simulates recovery
+conv:clear_error()
+assert_eq(conv._error_message, nil, "error cleared on recovery")
 
 -- Simulate end of turn
 conv:end_turn()

@@ -155,18 +155,11 @@ function M.setup(opts)
 		end
 	})
 
-	VK.set("n", keys.push_to_talk, function ()
+VK.set("n", keys.push_to_talk, function ()
 		if not M._voice or not M._voice:is_running() then
 			M.start()
 		end
-
-		local sidebar = M._ensure_sidebar()
-		if M.config.ui.sidebar_auto_open then
-			sidebar:open(false)
-		end
-		sidebar:set_state("ready")
-	end, { desc = "outloud: open" }
-	)
+	end, { desc = "outloud: start/stop daemon" })
 
 	--- Save accumulated content to register.
 	local function _save_to_register()
@@ -199,9 +192,19 @@ function M.setup(opts)
 	)
 
 	VK.set("n", keys.scratchpad, function ()
+		-- Opening the scratchpad preview should start the daemon if not running
+		if not M._voice or not M._voice:is_running() then
+			M.start()
+		end
+
+		-- Ensure accumulator exists for scratchpad mode
 		if not M._accumulator then
-			V.notify("[outloud] accumulator not active", VLL.WARN)
-			return
+			if M.config.accumulator and M.config.accumulator.enabled then
+				M._accumulator = Accumulator:new(M.config.accumulator)
+			else
+				V.notify("[outloud] accumulator not active", VLL.WARN)
+				return
+			end
 		end
 		M._accumulator:toggle_scratchpad()
 	end, { desc = "outloud: toggle scratchpad preview" }
@@ -422,12 +425,6 @@ function M._start_pipeline()
 		return
 	end
 
-	-- Initialize UI
-	local sidebar = M._ensure_sidebar()
-	if M.config.ui.sidebar_auto_open then
-		sidebar:open(false)
-	end
-
 	-- Initialize voice daemon
 	local backend = M.config.backend or "whisper"
 	local daemon_env = build_daemon_env(backend, M.config.model, M.config.audio)
@@ -461,16 +458,14 @@ function M._start_pipeline()
 		if accum_enabled and M._accumulator then
 			-- Accumulator mode: add final transcript to accumulator
 			V.schedule(function ()
-				local am = M.config.accumulator and M.config.accumulator.mode
-				if am == "scratchpad" then
-					-- Scratchpad mode: use add_fragment to route through
-					-- the delay timer + pending fragments system.
-					-- Fragments arriving during LLM processing or the 5s
-					-- post-result window are accumulated and sent as a
-					-- follow-up to the same chat session.
+				local has_handler = M.config.accumulator and M.config.accumulator.handler
+				if has_handler then
+					-- Handler configured: route through delay timer + pending fragments
+					-- system so fragments arriving during LLM processing or the 5s
+					-- post-result window are accumulated and sent as a follow-up.
 					M._accumulator:add_fragment(text)
 				else
-					-- Classic accumulator mode: append to buffer
+					-- No handler: classic direct accumulation
 					M._accumulator:append(text)
 				end
 			end)
@@ -567,17 +562,18 @@ function M._start_pipeline()
 			if backend_status and backend_status.status == "pending" then
 				-- Daemon alive, waiting for STT probe
 				sb:set_state("initializing")
-			elseif backend_status and backend_status.status == "healthy" then
-				sb:set_status("stt", "up")
-				if state == "idle" then
-					sb:set_state("stt_ready")
-				elseif state == "listening" then
-					sb:set_state("listening")
-					sb:set_device(device)
-				elseif state == "transcribing" then
-					sb:set_state("transcribing")
-					sb:set_device(device)
-				end
+		elseif backend_status and backend_status.status == "healthy" then
+			sb:clear_error()
+			sb:set_status("stt", "up")
+			if state == "idle" then
+				sb:set_state("stt_ready")
+			elseif state == "listening" then
+				sb:set_state("listening")
+				sb:set_device(device)
+			elseif state == "transcribing" then
+				sb:set_state("transcribing")
+				sb:set_device(device)
+			end
 			elseif backend_status and backend_status.status == "unhealthy" then
 				sb:set_status("stt", "error")
 				if backend_status.error and prev_backend ~= "unhealthy" then
@@ -637,7 +633,7 @@ function M._start_pipeline()
 	end)
 
 	M._voice:start()
-	sidebar:set_status("daemon", M._voice:is_running() and "up" or "error")
+	M._ensure_sidebar():set_status("daemon", M._voice:is_running() and "up" or "error")
 
 	-- Pre-fetch the device list so the first start_listening can forward the
 	-- device's native sample format. If this response hasn't arrived yet,
