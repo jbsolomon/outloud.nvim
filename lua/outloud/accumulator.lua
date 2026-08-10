@@ -667,7 +667,9 @@ function Accumulator:_start_silence_timer()
 	self._silence_timer = vim.uv.new_timer()
 	self._silence_timer:start(1000, 0, vim.schedule_wrap(function()
 		self._silence_timer = nil
-		-- Only flush if idle (no refinement in flight) and we have pending fragments
+		-- Only flush if idle (no refinement in flight) and we have pending fragments.
+		-- _iterating is now reliably set by _flush_pending_fragments before dispatching
+		-- to CodeCompanion, so this guard prevents concurrent LLM calls.
 		if not self._iterating and #self._pending_fragments > 0 then
 			self:_flush_pending_fragments()
 		end
@@ -687,8 +689,19 @@ end
 --- Reuses the existing CodeCompanion chat session via `chat:send()` to
 --- avoid session proliferation.
 --- Stops the silence timer since we're acting on the pending fragments.
+---
+--- Sets _iterating = true before dispatching so the silence timer and
+--- add_fragment() know a refinement is in flight. Clears it in the
+--- callback and drains any queued items, matching the main iterate path.
 function Accumulator:_flush_pending_fragments()
 	if #self._pending_fragments == 0 then
+		return
+	end
+	-- Defensive gate: callers check _iterating before invoking, but scheduled
+	-- calls (empty fragment, immediate trigger) may run after another path
+	-- already started a refinement. If so, bail — the fragments will be
+	-- picked up when the current iteration completes.
+	if self._iterating then
 		return
 	end
 	-- Stop the silence timer — we're processing the pending fragments now
@@ -713,6 +726,10 @@ function Accumulator:_flush_pending_fragments()
 		if self._cc_chat and vim.api.nvim_buf_is_valid(self._cc_chat.bufnr) then
 			vim.notify("[outloud] scratchpad: sending follow-up in existing session", vim.log.levels.INFO)
 
+			-- Set the gate so the silence timer and add_fragment know a
+			-- refinement is in flight. Cleared in on_completed below.
+			self._iterating = true
+
 			local _self = self
 			self._cc_chat.callbacks.on_completed = {vim.schedule_wrap(function(chat)
 				local response_text = ""
@@ -727,6 +744,18 @@ function Accumulator:_flush_pending_fragments()
 				_self:_refresh_buf()
 				local reg = _self.opts.register or "ol"
 				vim.fn.setreg(reg, response_text)
+
+				-- Clear the gate and resume queue processing
+				_self._iterating = false
+
+				-- Drain any items that queued up while this flush was in flight
+				if _self._queued and #_self._queued > 0 then
+					vim.schedule(function()
+						_self:_drain_queue()
+					end)
+					return
+				end
+
 				_self:_start_delay_timer()
 			end)}
 
@@ -772,8 +801,8 @@ end
 --- immediate flush.
 ---@param utterance string
 function Accumulator:add_fragment(utterance)
-	-- Empty fragment: signal to flush pending segments if idle
-	if not utterance or utterance == "" then
+	-- Empty or whitespace-only fragment: signal to flush pending segments if idle
+	if not utterance or utterance:match("^%s*$") then
 		if not self._iterating and #self._pending_fragments > 0 then
 			self:_stop_silence_timer()
 			vim.schedule(function()

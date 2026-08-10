@@ -503,26 +503,18 @@ function M._start_pipeline()
 		if not M._listening then
 			return
 		end
-		local accum_mode = M.config.accumulator and M.config.accumulator.mode
-		if accum_enabled and M._accumulator and text ~= "" then
-			if accum_mode == "scratchpad" then
-				-- Scratchpad mode: partials are just appended for preview,
-				-- iteration happens on final transcript
-				V.schedule(function ()
-					M._accumulator:append(text)
-				end)
-			else
-				-- Classic accumulator mode: feed partials into the accumulator
-				V.schedule(function ()
-					M._accumulator:append(text)
-				end)
+		V.schedule(function ()
+			-- Always show partials in the sidebar so the user sees live
+			-- transcription progress, regardless of accumulator mode.
+			if text ~= "" then
+				M._ensure_sidebar():set_partial(text)
 			end
-		else
-			-- Direct insertion mode: show in sidebar
+		end)
+
+		if accum_enabled and M._accumulator and text ~= "" then
+			-- Also feed partials into the accumulator for review/refinement
 			V.schedule(function ()
-				if text ~= "" then
-					M._ensure_sidebar():set_partial(text)
-				end
+				M._accumulator:append(text)
 			end)
 		end
 	end)
