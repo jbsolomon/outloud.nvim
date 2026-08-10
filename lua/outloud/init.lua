@@ -44,7 +44,7 @@ M.defaults = {
 		enabled = false,
 		mode = "hidden", -- "hidden" | "preview"
 		handler = nil,   -- { name = "default" } for CodeCompanion, or { fn = function(text, context) ... end }
-		register = "ol", -- named register to save scratchpad content to on stop
+		register = "o", -- named register to save scratchpad content to on stop
 		context = {
 			buffer = true,
 			selection = true,
@@ -164,7 +164,7 @@ VK.set("n", keys.push_to_talk, function ()
 	--- Save accumulated content to register.
 	local function _save_to_register()
 		if M._accumulator then
-			local reg = M.config.accumulator and M.config.accumulator.register or "ol"
+			local reg = M.config.accumulator and M.config.accumulator.register or "o"
 			M._accumulator:to_register(reg)
 		end
 	end
@@ -212,7 +212,8 @@ VK.set("n", keys.push_to_talk, function ()
 
 	VK.set("n", keys.accept, function ()
 		if not M._voice or not M._voice:is_running() then
-			V.notify("[outloud] waiting for daemon to start...", VLL.INFO)
+			V.notify("[outloud] starting daemon...", VLL.INFO)
+			M.start()
 			return
 		end
 		if M._listening then
@@ -500,12 +501,9 @@ function M._start_pipeline()
 	end)
 
 	M._voice:on_partial(function (text)
-		if not M._listening then
-			return
-		end
+		-- Show partials as soon as they arrive, even before the daemon
+		-- confirms "listening" (partials can precede the status event).
 		V.schedule(function ()
-			-- Always show partials in the sidebar so the user sees live
-			-- transcription progress, regardless of accumulator mode.
 			if text ~= "" then
 				M._ensure_sidebar():set_partial(text)
 			end
@@ -663,8 +661,8 @@ function M.stop()
 
 	if M._accumulator then
 		-- Save accumulated text to register before disposing
-		local reg = M.config.accumulator and M.config.accumulator.register or "ol"
-		M._accumulator:to_register(reg)
+		local reg = M.config.accumulator and M.config.accumulator.register or "o"
+			M._accumulator:to_register(reg)
 		M._accumulator:dispose()
 		M._accumulator = nil
 	end

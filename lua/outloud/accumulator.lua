@@ -402,7 +402,7 @@ function Accumulator:_apply_scratchpad_update(text, on_complete)
 	self._iterating = false
 
 	-- Yank refined content to register so user can paste immediately
-	local reg = self.opts.register or "ol"
+	local reg = self.opts.register or "o"
 	vim.fn.setreg(reg, text)
 
 	-- Always call the callback for the current iteration before processing queue
@@ -742,7 +742,7 @@ function Accumulator:_flush_pending_fragments()
 				end
 				_self.text = response_text
 				_self:_refresh_buf()
-				local reg = _self.opts.register or "ol"
+				local reg = _self.opts.register or "o"
 				vim.fn.setreg(reg, response_text)
 
 				-- Clear the gate and resume queue processing

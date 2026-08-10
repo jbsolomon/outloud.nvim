@@ -280,30 +280,6 @@ end
 
 -- Header ---------------------------------------------------------------
 
---- Keys that are relevant right now. Only globally-bound maps are listed, so a
---- hint is never shown for something that would not work from where the cursor
---- currently is; `?` is the one local affordance and is labelled as such in the
---- help block.
----@return string
-function Sidebar:_hint_line()
-	local k = self.keys or {}
-	local s = self.state
-	local parts
-
-		if s == "listening" then
-			parts = { (k.accept or "<leader>lt") .. " accept", (k.cancel or "<leader>lc") .. " cancel" }
-		elseif s == "ready" then
-			parts = { (k.accept or "<leader>lt") .. " record", (k.cancel or "<leader>lc") .. " cancel" }
-	elseif BUSY[s] then
-		parts = { "working" }
-	else
-		parts = { (k.push_to_talk or "<leader>ls") .. " talk" }
-	end
-
-	parts[#parts + 1] = (k.sidebar or "<leader>ll") .. " close"
-	return table.concat(parts, "   ")
-end
-
 --- Rewrite the fixed header rows in place. Never touches the conversation.
 function Sidebar:_render_header()
 	if not (self.buf and vim.api.nvim_buf_is_valid(self.buf)) then
@@ -350,12 +326,11 @@ function Sidebar:_render_header()
 	end
 	local phase_line = (" %s %s"):format(mark, label)
 
-	-- Error line: shown in row 2, replacing hints when an error is active
-	local hint_or_error
+	-- Error line: shown in row 2; blank when no error is active.
+	-- Keybinding hints are discoverable via `?` in the sidebar.
+	local hint_or_error = ""
 	if self._error_message and self._error_message ~= "" then
 		hint_or_error = " ✗ " .. self._error_message
-	else
-		hint_or_error = " " .. self:_hint_line()
 	end
 
 	self:_write(0, HEADER_H, {
