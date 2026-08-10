@@ -114,6 +114,9 @@ M._active_device = nil
 ---prompt.
 M._devices_requested = false
 
+---@type boolean true when <leader>lt was pressed while the daemon was still starting
+M._listen_on_ready = false
+
 ---@type table?
 M._partial_range = nil
 
@@ -212,6 +215,10 @@ VK.set("n", keys.push_to_talk, function ()
 
 	VK.set("n", keys.accept, function ()
 		if not M._voice or not M._voice:is_running() then
+			-- Startup includes an asynchronous server probe/model load. Remember
+			-- the user's intent so the first press starts the microphone too,
+			-- rather than requiring a second press after the daemon appears.
+			M._listen_on_ready = true
 			V.notify("[outloud] starting daemon...", VLL.INFO)
 			M.start()
 			return
@@ -349,6 +356,7 @@ function M.start()
 			signal("stt", "up")
 		elseif phase == "error" then
 			M._starting = false
+			M._listen_on_ready = false
 			signal("stt", "error")
 			ui_state("inactive", detail)
 		end
@@ -367,6 +375,7 @@ function M.start()
 		install.build_daemon(function (ok)
 			if not ok then
 				M._starting = false
+				M._listen_on_ready = false
 				ui_state("inactive", "daemon build failed")
 				return
 			end
@@ -409,6 +418,7 @@ _start_with_server = function (backend, ui_state, signal, on_server_phase, on_se
 				M._start_pipeline()
 				ui_state("ready")
 			else
+				M._listen_on_ready = false
 				signal("stt", "error")
 				ui_state("inactive", "external server unreachable")
 				V.notify(
@@ -630,6 +640,15 @@ function M._start_pipeline()
 	-- the daemon probes the device itself.
 	if M._voice:is_running() then
 		M._voice:list_devices()
+
+		-- A first <leader>lt press may have started the asynchronous pipeline.
+		-- Begin capture now that the daemon exists; status confirmation will set
+		-- _listening and clear _start_pending as usual.
+		if M._listen_on_ready then
+			M._listen_on_ready = false
+			M._start_pending = true
+			M._voice:start_listening(M.config.audio.device)
+		end
 	end
 end
 
@@ -673,6 +692,7 @@ function M.stop()
 	M._start_pending = false
 	M._backend_status = nil
 	M._devices_requested = false
+	M._listen_on_ready = false
 end
 
 ---@return string
