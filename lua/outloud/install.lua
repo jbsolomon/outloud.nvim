@@ -125,8 +125,17 @@ function M.run()
 					"[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO
 				)
 			else
+				local model_cfg = outloud.config.model or outloud.defaults.model or {}
+				local model_label
+				if model_cfg.download_url then
+					model_label = "custom (download_url)"
+				elseif model_cfg.filename then
+					model_label = model_cfg.filename .. " (" .. (model_cfg.repo or WHISPER_MODEL_REPO) .. ")"
+				else
+					model_label = model_cfg.size or outloud.defaults.model.size
+				end
 				vim.notify(
-					"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. (outloud.config.model and outloud.config.model.size or outloud.defaults.model.size) .. ")"
+					"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. model_label .. ")"
 				)
 			end
 		end)
@@ -141,8 +150,17 @@ function M.run()
 				"[outloud] model will be auto-downloaded on first :OutloudStart via llama-server -hf " .. HF_REPO
 			)
 		else
+			local model_cfg = outloud.config.model or outloud.defaults.model or {}
+			local model_label
+			if model_cfg.download_url then
+				model_label = "custom (download_url)"
+			elseif model_cfg.filename then
+				model_label = model_cfg.filename .. " (" .. (model_cfg.repo or WHISPER_MODEL_REPO) .. ")"
+			else
+				model_label = model_cfg.size or outloud.defaults.model.size
+			end
 			vim.notify(
-				"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. (outloud.config.model and outloud.config.model.size or outloud.defaults.model.size) .. ")"
+				"[outloud] model will be auto-downloaded on first :OutloudStart via whisper-server (" .. model_label .. ")"
 			)
 		end
 	end
@@ -418,7 +436,7 @@ end
 ---@type number?
 M._whisper_job_id = nil
 
---- Get the data directory for outloud artifacts.
+--- Resolve the data directory for outloud artifacts.
 ---@return string
 local function data_dir()
 	local base = vim.env.XDG_DATA_HOME
@@ -428,6 +446,97 @@ local function data_dir()
 	local d = base .. "/outloud"
 	vim.fn.mkdir(d, "p")
 	return d
+end
+
+--- Manifest file path for cached repo → filename mappings.
+---@return string
+local function manifest_path()
+	return data_dir() .. "/models/manifest.json"
+end
+
+--- Read the repo→filename manifest, returning an empty table on missing/corrupt.
+---@return table<string, string>
+local function read_manifest()
+	local path = manifest_path()
+	if vim.fn.filereadable(path) ~= 1 then
+		return {}
+	end
+	local f = io.open(path, "r")
+	if not f then return {} end
+	local content = f:read("*a")
+	f:close()
+	local ok, data = pcall(vim.json.decode, content)
+	if ok and type(data) == "table" then return data end
+	return {}
+end
+
+--- Write the repo→filename manifest.
+---@param data table<string, string>
+local function write_manifest(data)
+	local path = manifest_path()
+	vim.fn.mkdir(data_dir() .. "/models", "p")
+	local f = io.open(path, "w")
+	if f then
+		f:write(vim.json.encode(data))
+		f:close()
+	end
+end
+
+--- Look up a filename for a repo in the manifest.
+---@param repo string
+---@return string|nil
+local function manifest_lookup(repo)
+	return read_manifest()[repo]
+end
+
+--- Record a repo→filename mapping in the manifest.
+---@param repo string
+---@param filename string
+local function manifest_put(repo, filename)
+	local data = read_manifest()
+	data[repo] = filename
+	write_manifest(data)
+end
+
+--- Probe a HuggingFace repo to find the model filename.
+--- Looks for .bin or .gguf files in the repo root, preferring .bin.
+---@param repo string
+---@param cb fun(filename: string|nil)
+local function probe_hf_repo(repo, cb)
+	local api_url = string.format("https://huggingface.co/api/models/%s/tree/main", repo)
+	vim.system({
+		"curl", "-sf", "--max-time", "10", api_url,
+	}, { text = true }, function(res)
+		vim.schedule(function()
+			if res.code ~= 0 or not res.stdout then
+				cb(nil)
+				return
+			end
+			local ok, files = pcall(vim.json.decode, res.stdout)
+			if not ok or type(files) ~= "table" then
+				cb(nil)
+				return
+			end
+			local bin_file = nil
+			local gguf_file = nil
+			for _, entry in ipairs(files) do
+				if type(entry) == "table" and type(entry.path) == "string" then
+					local p = entry.path
+					if p:match("%.bin$") then
+						bin_file = p
+						break
+					elseif p:match("%.gguf$") and not gguf_file then
+						gguf_file = p
+					end
+				end
+			end
+			local chosen = bin_file or gguf_file
+			if chosen then
+				manifest_put(repo, chosen)
+			end
+			cb(chosen)
+		end)
+	end)
 end
 
 --- Resolve the whisper-server binary path.
@@ -446,17 +555,42 @@ local function find_whisper_server()
 	return nil
 end
 
---- Resolve the whisper model path.
---- Checks: explicit path, then data_dir/models, then nil.
+--- Resolve the whisper model filename from config.
+--- Returns nil when the filename cannot be determined synchronously
+--- (custom repo with no manifest entry — needs probing).
 ---@param model_size string
+---@param model_filename? string
+---@param model_repo? string
+---@return string|nil filename, or nil if probing needed
+local function resolve_model_filename(model_size, model_filename, model_repo)
+	-- Explicit filename always wins
+	if model_filename then
+		return model_filename
+	end
+
+	-- Custom repo: check manifest, otherwise need probe
+	if model_repo and model_repo ~= WHISPER_MODEL_REPO then
+		local cached = manifest_lookup(model_repo)
+		if cached then
+			return cached
+		end
+		return nil -- signal: needs probe
+	end
+
+	-- Default repo: use size-based naming
+	return WHISPER_MODEL_SIZES[model_size] or WHISPER_MODEL_SIZES.medium
+end
+
+--- Resolve the whisper model path.
+--- Checks: explicit path, then data_dir/models (using resolved filename), then nil.
 ---@param model_path? string
+---@param filename string
 ---@return string|nil
-local function find_whisper_model(model_size, model_path)
+local function find_whisper_model(model_path, filename)
 	if model_path and vim.fn.filereadable(model_path) == 1 then
 		return model_path
 	end
-	local fname = WHISPER_MODEL_SIZES[model_size] or WHISPER_MODEL_SIZES.medium
-	local candidate = data_dir() .. "/models/" .. fname
+	local candidate = data_dir() .. "/models/" .. filename
 	if vim.fn.filereadable(candidate) == 1 then
 		return candidate
 	end
@@ -517,21 +651,28 @@ local function download_whisper_server(on_done)
 	end)
 end
 
---- Download a whisper model from HuggingFace with progress reporting.
+--- Download a whisper model from HuggingFace or a direct URL with progress reporting.
 --- Uses a HEAD request to get Content-Length, then polls file size via uv.fs_stat.
----@param model_size string
+---@param filename string
+---@param model_repo? string
+---@param download_url? string
 ---@param on_phase fun(phase: string, detail?: string)
 ---@param on_done fun(ok: boolean, detail?: string)
-local function download_whisper_model(model_size, on_phase, on_done)
-	local fname = WHISPER_MODEL_SIZES[model_size] or WHISPER_MODEL_SIZES.medium
+local function download_whisper_model(filename, model_repo, download_url, on_phase, on_done)
 	local model_dir = data_dir() .. "/models"
 	vim.fn.mkdir(model_dir, "p")
-	local dest = model_dir .. "/" .. fname
+	local dest = model_dir .. "/" .. filename
 
-	-- HuggingFace direct download URL
-	local url = "https://huggingface.co/" .. WHISPER_MODEL_REPO .. "/resolve/main/" .. fname
+	-- Determine download URL: explicit URL > HuggingFace repo
+	local url
+	if download_url then
+		url = download_url
+	else
+		local repo = model_repo or WHISPER_MODEL_REPO
+		url = "https://huggingface.co/" .. repo .. "/resolve/main/" .. filename
+	end
 
-	vim.notify("[outloud] downloading whisper model (" .. model_size .. ")...", vim.log.levels.INFO)
+	vim.notify("[outloud] downloading whisper model (" .. filename .. ")...", vim.log.levels.INFO)
 
 	on_phase("downloading", "connecting...")
 
@@ -636,13 +777,16 @@ end
 
 --- Start whisper-server with the specified model.
 --- Auto-downloads binary and model if missing.
----@param opts? { port?: number, model_size?: string, model_path?: string, on_phase?: fun(phase: string, detail?: string), stall_timeout_ms?: number }
+---@param opts? { port?: number, model_size?: string, model_path?: string, model_filename?: string, model_repo?: string, download_url?: string, on_phase?: fun(phase: string, detail?: string), stall_timeout_ms?: number }
 ---@param on_ready? fun()
 function M.start_whisper_server(opts, on_ready)
 	opts = opts or {}
 	local port = opts.port or WHISPER_DEFAULT_PORT
 	local model_size = opts.model_size or "medium"
 	local model_path = opts.model_path
+	local model_filename = opts.model_filename
+	local model_repo = opts.model_repo
+	local download_url = opts.download_url
 	local on_phase = opts.on_phase or function() end
 	local stall_ms = opts.stall_timeout_ms or DEFAULT_STALL_MS
 
@@ -686,31 +830,42 @@ function M.start_whisper_server(opts, on_ready)
 		local bin = find_whisper_server()
 		if not bin then
 			on_phase("downloading", "downloading whisper-server")
-			download_whisper_server(function(ok, detail)
-				if not ok then
-					on_phase("error", detail or "failed to download whisper-server")
-					return
-				end
-				bin = find_whisper_server()
-				M._ensure_model_and_start(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
-			end)
-		else
-			M._ensure_model_and_start(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
-		end
+				download_whisper_server(function(ok, detail)
+					if not ok then
+						on_phase("error", detail or "failed to download whisper-server")
+						return
+					end
+					bin = find_whisper_server()
+					M._ensure_model_and_start(bin, port, model_size, model_path, model_filename, model_repo, download_url, on_phase, stall_ms, on_ready)
+				end)
+			else
+				M._ensure_model_and_start(bin, port, model_size, model_path, model_filename, model_repo, download_url, on_phase, stall_ms, on_ready)
+			end
 	end)
 end
 
 --- Ensure model exists, then spawn whisper-server.
-M._ensure_model_and_start = function(bin, port, model_size, model_path, on_phase, stall_ms, on_ready)
-	local model = find_whisper_model(model_size, model_path)
-	if not model then
-		on_phase("downloading", "downloading model (" .. model_size .. ")")
-		download_whisper_model(model_size, on_phase, function(ok, detail)
+--- If a custom repo is used with no cached manifest entry, probes HuggingFace first.
+M._ensure_model_and_start = function(bin, port, model_size, model_path, model_filename, model_repo, download_url, on_phase, stall_ms, on_ready)
+	-- Resolve the filename: explicit > manifest-cached > size-derived > needs probe
+	local resolved = resolve_model_filename(model_size, model_filename, model_repo)
+
+	if resolved then
+		-- Filename known: check local cache, download if missing
+		local model = find_whisper_model(model_path, resolved)
+		if model then
+			M._spawn_whisper_server(bin, model, port, on_phase, stall_ms, on_ready)
+			return
+		end
+
+		-- Model not cached: download it
+		on_phase("downloading", "downloading model")
+		download_whisper_model(resolved, model_repo, download_url, on_phase, function(ok, detail)
 			if not ok then
 				on_phase("error", detail or "failed to download model")
 				return
 			end
-			model = find_whisper_model(model_size, model_path)
+			model = find_whisper_model(model_path, resolved)
 			if not model then
 				on_phase("error", "model download succeeded but file not found")
 				return
@@ -718,7 +873,16 @@ M._ensure_model_and_start = function(bin, port, model_size, model_path, on_phase
 			M._spawn_whisper_server(bin, model, port, on_phase, stall_ms, on_ready)
 		end)
 	else
-		M._spawn_whisper_server(bin, model, port, on_phase, stall_ms, on_ready)
+		-- Custom repo with no manifest entry: probe HuggingFace first
+		on_phase("downloading", "resolving model filename...")
+		probe_hf_repo(model_repo, function(probed_filename)
+			if not probed_filename then
+				on_phase("error", "could not resolve model filename for repo " .. model_repo)
+				return
+			end
+			-- Recurse with the now-resolved filename
+			M._ensure_model_and_start(bin, port, model_size, model_path, probed_filename, model_repo, download_url, on_phase, stall_ms, on_ready)
+		end)
 	end
 end
 
@@ -855,6 +1019,7 @@ end
 M.HF_REPO = HF_REPO
 M.DEFAULT_PORT = DEFAULT_PORT
 M.WHISPER_DEFAULT_PORT = WHISPER_DEFAULT_PORT
+M.resolve_model_filename = resolve_model_filename
 
 -- Daemon build lifecycle (called from init.lua's M.start()).
 M.needs_rebuild = needs_rebuild

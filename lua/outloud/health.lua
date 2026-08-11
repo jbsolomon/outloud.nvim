@@ -126,13 +126,31 @@ function M.check()
 
 	if backend == "whisper" then
 		if not model_cfg.server_url then
-			local model_size = model_cfg.size or "medium"
 			if model_cfg.path then
 				report_model_file(model_cfg.path, "whisper model (explicit path)")
 			else
-				local fname = WHISPER_MODEL_SIZES[model_size] or WHISPER_MODEL_SIZES.medium
-				local default_path = data_dir() .. "/models/" .. fname
-				report_model_file(default_path, string.format("whisper model '%s'", model_size))
+				-- Try to resolve the filename the same way install.lua does
+				local install = require("outloud.install")
+				local resolved = install.resolve_model_filename(
+					model_cfg.size or "medium",
+					model_cfg.filename,
+					model_cfg.repo
+				)
+				if resolved then
+					local default_path = data_dir() .. "/models/" .. resolved
+					local label = resolved
+					if model_cfg.download_url then
+						label = label .. " (from download_url)"
+					end
+					report_model_file(default_path, string.format("whisper model '%s'", label))
+				else
+					vim.health.warn(
+						string.format("whisper model filename unknown for repo '%s'", model_cfg.repo),
+						{
+							"Set model.filename explicitly, or run :OutloudStart to auto-resolve from HuggingFace",
+						}
+					)
+				end
 			end
 		else
 			vim.health.info("whisper model check skipped (external server_url configured)")

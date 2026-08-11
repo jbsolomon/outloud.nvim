@@ -258,6 +258,10 @@ require("outloud").setup({
 
   model = {
     size = "medium",           -- whisper model size: "tiny", "base", "small", "medium", "large"
+    repo = "ggerganov/whisper.cpp",  -- HuggingFace repo for model download
+    -- filename = "ggml-medium.bin",  -- override model filename (e.g. "ggml-tiny-q5_1.bin")
+    -- download_url = "...",          -- direct download URL (bypasses HuggingFace)
+    -- path = "/path/to/model.bin",  -- explicit local model path
     server_port = 8000,        -- whisper-server port (default 8000, 8674 for openai)
     -- server_url = "http://127.0.0.1:8000",  -- use external server
   },

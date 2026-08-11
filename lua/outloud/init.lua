@@ -13,7 +13,7 @@ local M = {}
 
 ---@class outloud.Config
 ---@field backend?    string                                                                                                                                                                                                        "whisper" (default) or "openai" (OpenAI-compatible)
----@field model       { size?: string, path?: string, hf_repo?: string, server_port: number, server_url?: string }
+---@field model       { size?: string, path?: string, repo?: string, filename?: string, download_url?: string, hf_repo?: string, server_port: number, server_url?: string }
 ---@field audio       { sample_rate: number, channels: number, vad_threshold: number, silence_duration_ms: number, max_duration_ms: number, partial_interval_ms: number, window_ms: number, live_buffer: boolean, device?: string }
 ---@field accumulator { enabled: boolean, mode: string, handler?: table, context: table, register: string }
 ---@field ui          { sidebar_position: string, sidebar_width: number, sidebar_auto_open: boolean, statusline: boolean }
@@ -25,6 +25,9 @@ M.defaults = {
 	backend = "whisper",
 	model = {
 		size = "medium",           -- whisper model size: "tiny", "base", "small", "medium", "large"
+		repo = "ggerganov/whisper.cpp", -- HuggingFace repo for model download
+		-- filename = "ggml-medium.bin",      -- override model filename (e.g. "ggml-tiny-q5_1.bin")
+		-- download_url = "...",              -- direct download URL (bypasses HuggingFace)
 		hf_repo = install.HF_REPO, -- for openai backend: llama-server HuggingFace repo
 		server_port = install.WHISPER_DEFAULT_PORT
 		-- server_url = "http://127.0.0.1:8000",  -- override to use external server
@@ -394,6 +397,9 @@ _start_with_server = function (backend, ui_state, signal, on_server_phase, on_se
 				port = M.config.model.server_port or install.WHISPER_DEFAULT_PORT,
 				model_size = M.config.model.size or "medium",
 				model_path = M.config.model.path,
+				model_filename = M.config.model.filename,
+				model_repo = M.config.model.repo,
+				download_url = M.config.model.download_url,
 				on_phase = on_server_phase
 			}, on_server_ready)
 		else
