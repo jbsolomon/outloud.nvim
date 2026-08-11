@@ -109,7 +109,7 @@ async fn stdin_command_loop(
                             }
                             Err(e) => {
                                 let _ = event_tx.blocking_send(Event::Error {
-                                    message: format!("failed to start capture: {e}"),
+                                    message: format!("failed to start capture: {e:?}"),
                                 });
                                 // Back to Idle; the tracker keeps the last-known
                                 // backend health rather than inventing one.

@@ -69,7 +69,7 @@ impl Transform for TranscribeTransform {
                     is_final,
                 },
                 Err(e) if is_final => Event::Error {
-                    message: format!("transcription failed: {e}"),
+                    message: format!("transcription failed: {e:?}"),
                 },
                 Err(_) => Event::Chunk {
                     text: String::new(),
