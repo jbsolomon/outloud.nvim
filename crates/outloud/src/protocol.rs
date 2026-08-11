@@ -131,18 +131,16 @@ pub enum Event {
     },
     #[serde(rename = "vad")]
     Vad { speaking: bool },
-    /// An interim, non-final transcript emitted while the user is still
-    /// speaking. Provisional — superseded by the final `Transcript`.
-    /// Uses a sliding window so each partial is constant-size audio.
-    #[serde(rename = "partial")]
-    Partial {
+    /// A non-overlapping audio chunk transcript.
+    /// When `is_final` is `true`, this is the last chunk for the current
+    /// utterance (triggered by silence or max duration).
+    #[serde(rename = "chunk")]
+    Chunk {
         text: String,
-        window_start_ms: u64,
-        window_end_ms: u64,
-        seq: u64,
+        duration_ms: u64,
+        #[serde(default)]
+        is_final: bool,
     },
-    #[serde(rename = "transcript")]
-    Transcript { text: String, duration_ms: u64 },
     #[serde(rename = "error")]
     Error { message: String },
     #[serde(rename = "devices")]
@@ -185,30 +183,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn partial_serializes_with_partial_tag() {
-        let line = serialize_event(&Event::Partial {
+    fn chunk_serializes_with_chunk_tag() {
+        let line = serialize_event(&Event::Chunk {
             text: "hello".into(),
-            window_start_ms: 0,
-            window_end_ms: 5000,
-            seq: 1,
+            duration_ms: 5000,
+            is_final: false,
         })
         .unwrap();
         assert_eq!(
             line,
-            r#"{"type":"partial","text":"hello","window_start_ms":0,"window_end_ms":5000,"seq":1}"#
+            r#"{"type":"chunk","text":"hello","duration_ms":5000,"is_final":false}"#
         );
     }
 
     #[test]
-    fn transcript_carries_duration() {
-        let line = serialize_event(&Event::Transcript {
+    fn chunk_final_serializes_with_is_final() {
+        let line = serialize_event(&Event::Chunk {
             text: "done".into(),
             duration_ms: 42,
+            is_final: true,
         })
         .unwrap();
         assert_eq!(
             line,
-            r#"{"type":"transcript","text":"done","duration_ms":42}"#
+            r#"{"type":"chunk","text":"done","duration_ms":42,"is_final":true}"#
         );
     }
 
@@ -396,23 +394,23 @@ mod tests {
     // --- Partial event fields ---
 
     #[test]
-    fn partial_with_empty_text() {
-        let line = serialize_event(&Event::Partial {
+    fn chunk_with_empty_text() {
+        let line = serialize_event(&Event::Chunk {
             text: String::new(),
-            window_start_ms: 100,
-            window_end_ms: 200,
-            seq: 5,
+            duration_ms: 5000,
+            is_final: false,
         })
         .unwrap();
         assert!(line.contains(r#""text":"""#));
-        assert!(line.contains(r#""seq":5"#));
+        assert!(line.contains(r#""type":"chunk""#));
     }
 
     #[test]
-    fn transcript_with_special_characters() {
-        let line = serialize_event(&Event::Transcript {
+    fn chunk_with_special_characters() {
+        let line = serialize_event(&Event::Chunk {
             text: "hello \"world\" \\test".into(),
             duration_ms: 1000,
+            is_final: true,
         })
         .unwrap();
         assert!(line.contains(r#"hello \"world\" \\test"#));

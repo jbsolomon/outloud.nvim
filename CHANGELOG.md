@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-08-08)
+
+### Refactoring
+
+- Replace sliding-window Partial events and Utterance events with a unified Chunk event carrying an `is_final` flag. Each chunk contains non-overlapping samples, so every sample is transcribed exactly once — no sliding window, no sequence numbers, no staleness checks, no single-in-flight gate.
+- Remove `partial_gate` (shared AtomicBool) and `GateGuard` from the audio callback and TranscribeTransform.
+- Remove `partial_interval_ms` / `OUTLOUD_PARTIAL_MS` and `window_ms` / `OUTLOUD_WINDOW_MS` from AudioConfig. Replace with `chunk_interval_ms` / `OUTLOUD_CHUNK_MS` (default 5000ms).
+- VadFilter no longer emits transcribing status or accepts StatusTracker; final chunks carry `is_final = true` downstream.
+- EventSink emits Idle status after every event except non-final chunks, preserving the UI listening/transcribing state.
+- Fix integration tests: await_cb polling for async callbacks, space-joined fallback text, and remove assertions against the non-existent `_partial_text` field.
+
+## 0.7.0 (2026-08-07)
+
+### Bug Fixes
+
+- Daemon no longer fails with "The requested stream configuration is not supported by the device" on Windows/WASAPI: the capture stream now uses the device's native channel count (e.g. stereo mic arrays) instead of requesting mono; the VAD pipeline downmixes to mono as before
+- Sidebar no longer gets stuck on "initializing...": bump the daemon version so `needs_rebuild()` rebuilds stale pre-heartbeat-protocol binaries whose status events lack backend health
+- Sidebar no longer crashes with "attempt to concatenate field 'device' (a userdata value)" on every daemon heartbeat: status events with an unset device (idle heartbeats, after stop) carry JSON `null`, which `vim.json.decode` maps to the `vim.NIL` userdata sentinel; nullable protocol fields (`device`, `default`) are now normalized to Lua `nil` at the decode boundary
+- Startup no longer blocks on a hit-enter prompt from the device-list notification; the startup `list_devices` pre-fetch is now silent and the list is only shown for an explicit `:OutloudDevices`. Capture defaults to the system default input device (first in the daemon's sorted list)
+- Partial transcripts no longer stop after the first one per capture session: the capture-side in-flight flag was set but never reset. It is now a single-in-flight gate shared with the transcription stage, which releases it when the partial completes — so a slow STT backend drops newer partials at the source instead of silently disabling them for the rest of the session
 
 ### Breaking Changes
 

@@ -117,9 +117,6 @@ M._devices_requested = false
 ---@type boolean true when <leader>lt was pressed while the daemon was still starting
 M._listen_on_ready = false
 
----@type table?
-M._partial_range = nil
-
 ---@type outloud.Accumulator?
 M._accumulator = nil
 
@@ -447,82 +444,27 @@ function M._start_pipeline()
 		M._accumulator = Accumulator:new(M.config.accumulator)
 	end
 
-	M._voice:on_transcript(function (text, duration_ms)
-		if not M._listening then
-			return
-		end
-		M._state = "idle"
-		ui.set_state("idle")
+	M._voice:on_chunk(function (text, duration_ms, is_final)
+		if not text or text == "" then return end
+
+		-- Show chunks in sidebar
 		V.schedule(function ()
-			local sb = M._ensure_sidebar()
-			local accum_mode = M.config.accumulator and M.config.accumulator.mode
-			if accum_enabled and M._accumulator and accum_mode == "scratchpad" then
-				-- Scratchpad mode: the scratchpad floating window is the surface;
-				-- do NOT also log to the sidebar (avoids utterance duplication).
-				sb:set_state("idle")
-			else
-				sb:begin_turn(text)
-				sb:set_state("idle")
-			end
+			M._ensure_sidebar():set_chunk(text)
 		end)
 
 		if accum_enabled and M._accumulator then
-			-- Accumulator mode: add final transcript to accumulator
+			-- Feed chunks into the accumulator
 			V.schedule(function ()
-				local has_handler = M.config.accumulator and M.config.accumulator.handler
-				if has_handler then
-					-- Handler configured: route through delay timer + pending fragments
-					-- system so fragments arriving during LLM processing or the 5s
-					-- post-result window are accumulated and sent as a follow-up.
-					M._accumulator:add_fragment(text)
-				else
-					-- No handler: classic direct accumulation
-					M._accumulator:append(text)
-				end
+				M._accumulator:append(text, is_final)
 			end)
 		else
-			-- Direct insertion mode: replace any partial insertion range with the complete text.
+			-- Direct insertion mode: insert chunk at cursor
 			V.schedule(function ()
 				local buf = V.api.nvim_get_current_buf()
 				V.api.nvim_set_option_value("modifiable", true, { buf = buf })
-
-				if M._partial_range then
-					-- Replace the tracked partial range with the final transcript
-					local r = M._partial_range
-					M._partial_range = nil
-					local lines = V.split(text, "\n")
-					V.api.nvim_buf_set_text(buf, r.sline, r.scol, r.eline, r.ecol, lines)
-				else
-					-- No partials were shown, insert at cursor like before
-					local line = V.api.nvim_win_get_cursor(0)[1] - 1
-					local col = V.api.nvim_win_get_cursor(0)[2]
-					local lines = V.split(text, "\n")
-					if #lines == 1 then
-						V.api.nvim_buf_set_text(buf, line, col, line, col, { text })
-					else
-						V.api.nvim_buf_set_lines(buf, line, line, false, { lines[1] })
-						for i = 2, #lines do
-							V.api.nvim_buf_add_line(buf, lines[i], true)
-						end
-					end
-				end
-			end)
-		end
-	end)
-
-	M._voice:on_partial(function (text)
-		-- Show partials as soon as they arrive, even before the daemon
-		-- confirms "listening" (partials can precede the status event).
-		V.schedule(function ()
-			if text ~= "" then
-				M._ensure_sidebar():set_partial(text)
-			end
-		end)
-
-		if accum_enabled and M._accumulator and text ~= "" then
-			-- Also feed partials into the accumulator for review/refinement
-			V.schedule(function ()
-				M._accumulator:append(text)
+				local line = V.api.nvim_win_get_cursor(0)[1] - 1
+				local col = V.api.nvim_win_get_cursor(0)[2]
+				V.api.nvim_buf_set_text(buf, line, col, line, col, { text })
 			end)
 		end
 	end)

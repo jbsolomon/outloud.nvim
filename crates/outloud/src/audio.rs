@@ -22,12 +22,9 @@ pub struct AudioConfig {
     pub vad_threshold: f32,
     pub silence_duration_ms: u64,
     pub max_duration_ms: u64,
-    /// How often to emit an interim (partial) transcript while speaking.
-    /// Zero disables partials.
-    pub partial_interval_ms: u64,
-    /// Size of the sliding window for partial transcription in milliseconds.
-    /// Each partial only transcribes the most recent `window_ms` of audio.
-    pub window_ms: u64,
+    /// How often to emit a non-overlapping audio chunk while speaking.
+    /// Zero disables chunking (only final utterance on silence).
+    pub chunk_interval_ms: u64,
     /// Optional device name to use for input. If None, uses the default device.
     pub device_name: Option<String>,
 }
@@ -40,8 +37,7 @@ impl Default for AudioConfig {
             // perceived-latency knob, so it is kept short.
             silence_duration_ms: 400,
             max_duration_ms: 30000,
-            partial_interval_ms: 700,
-            window_ms: 5000,
+            chunk_interval_ms: 5000,
             device_name: None,
         }
     }
@@ -57,8 +53,7 @@ mod tests {
         assert_eq!(cfg.vad_threshold, 0.01);
         assert_eq!(cfg.silence_duration_ms, 400);
         assert_eq!(cfg.max_duration_ms, 30000);
-        assert_eq!(cfg.partial_interval_ms, 700);
-        assert_eq!(cfg.window_ms, 5000);
+        assert_eq!(cfg.chunk_interval_ms, 5000);
     }
 
     #[test]
@@ -68,8 +63,7 @@ mod tests {
         assert_eq!(cfg.vad_threshold, 0.01);
         assert_eq!(cfg.silence_duration_ms, 400);
         assert_eq!(cfg.max_duration_ms, 30000);
-        assert_eq!(cfg.partial_interval_ms, 700);
-        assert_eq!(cfg.window_ms, 5000);
+        assert_eq!(cfg.chunk_interval_ms, 5000);
     }
 
     #[test]
@@ -93,15 +87,9 @@ mod tests {
     }
 
     #[test]
-    fn from_env_overrides_partial_ms() {
-        let cfg = AudioConfig::from_env_map([("OUTLOUD_PARTIAL_MS", "0")].into_iter());
-        assert_eq!(cfg.partial_interval_ms, 0);
-    }
-
-    #[test]
-    fn from_env_overrides_window_ms() {
-        let cfg = AudioConfig::from_env_map([("OUTLOUD_WINDOW_MS", "10000")].into_iter());
-        assert_eq!(cfg.window_ms, 10000);
+    fn from_env_overrides_chunk_ms() {
+        let cfg = AudioConfig::from_env_map([("OUTLOUD_CHUNK_MS", "10000")].into_iter());
+        assert_eq!(cfg.chunk_interval_ms, 10000);
     }
 
     #[test]
@@ -116,16 +104,15 @@ mod tests {
             [
                 ("OUTLOUD_VAD_THRESHOLD", "0.1"),
                 ("OUTLOUD_SILENCE_MS", "200"),
-                ("OUTLOUD_PARTIAL_MS", "500"),
+                ("OUTLOUD_CHUNK_MS", "500"),
             ]
             .into_iter(),
         );
         assert_eq!(cfg.vad_threshold, 0.1);
         assert_eq!(cfg.silence_duration_ms, 200);
-        assert_eq!(cfg.partial_interval_ms, 500);
+        assert_eq!(cfg.chunk_interval_ms, 500);
         // Unchanged
         assert_eq!(cfg.max_duration_ms, 30000);
-        assert_eq!(cfg.window_ms, 5000);
     }
 
     #[test]
@@ -158,21 +145,17 @@ mod tests {
         assert_eq!(parse_sample_format(""), None);
     }
 
-    /// The audio callback claims the shared partial gate when emitting a
-    /// partial and drops newer partials while the gate is held; releasing
-    /// the gate (as the transcription stage does) resumes emission.
+    /// The audio callback emits non-overlapping chunks at the configured
+    /// interval. Each chunk contains samples that haven't been sent before.
     #[test]
-    fn partials_are_single_in_flight_via_shared_gate() {
-        let gate = Arc::new(AtomicBool::new(false));
+    fn chunks_are_non_overlapping() {
         let params = CaptureParams {
             threshold: 0.01,
             silence_dur: Duration::from_millis(400),
             max_dur: Duration::from_millis(30000),
-            partial_interval: 700,
-            window_ms: 5000,
+            chunk_interval: 10, // 10ms chunk interval for testing
             sample_rate: 16000,
             device_channels: 1,
-            partial_gate: gate.clone(),
         };
         let listening = AtomicBool::new(true);
         let state = Mutex::new(CaptureState::new());
@@ -180,33 +163,25 @@ mod tests {
         // 10 ms of audio comfortably above the VAD threshold.
         let speech = vec![0.5f32; 160];
 
-        // Speech start: VAD event only, no partial yet (interval not elapsed).
+        // Speech start: VAD event only, no chunk yet (interval not elapsed).
         handle_input(&speech, &listening, &state, &tx, &params);
         assert!(matches!(rx.try_recv().unwrap(), AudioEvent::Vad(true)));
 
-        // Interval elapsed → partial emitted, gate claimed.
-        state.lock().unwrap().last_partial = Instant::now() - Duration::from_secs(1);
+        // Interval elapsed → chunk emitted.
+        state.lock().unwrap().last_chunk = Instant::now() - Duration::from_secs(1);
         handle_input(&speech, &listening, &state, &tx, &params);
-        assert!(matches!(
-            rx.try_recv().unwrap(),
-            AudioEvent::Partial { seq: 1, .. }
-        ));
-        assert!(gate.load(Ordering::Relaxed));
+        let evt = rx.try_recv().unwrap();
+        assert!(matches!(evt, AudioEvent::Chunk { .. }));
+        if let AudioEvent::Chunk { samples, .. } = evt {
+            // First 160 accumulated but not emitted, then 160 more added.
+            // Chunk contains all samples since last_chunk (which was reset
+            // at speech start), so 320 total.
+            assert_eq!(samples.len(), 320);
+        }
 
-        // Gate held → the next partial is dropped at the source.
-        state.lock().unwrap().last_partial = Instant::now() - Duration::from_secs(1);
-        handle_input(&speech, &listening, &state, &tx, &params);
+        // Next callback: no new samples since last chunk, so nothing emitted.
+        handle_input(&[0.0f32; 1], &listening, &state, &tx, &params);
         assert!(rx.try_recv().is_err());
-
-        // Gate released (transcription completed) → partials resume.
-        gate.store(false, Ordering::Relaxed);
-        state.lock().unwrap().last_partial = Instant::now() - Duration::from_secs(1);
-        handle_input(&speech, &listening, &state, &tx, &params);
-        assert!(matches!(
-            rx.try_recv().unwrap(),
-            AudioEvent::Partial { seq: 2, .. }
-        ));
-        assert!(gate.load(Ordering::Relaxed));
     }
 }
 
@@ -235,8 +210,7 @@ impl AudioConfig {
             vad_threshold: parse(&map, "OUTLOUD_VAD_THRESHOLD", d.vad_threshold),
             silence_duration_ms: parse(&map, "OUTLOUD_SILENCE_MS", d.silence_duration_ms),
             max_duration_ms: parse(&map, "OUTLOUD_MAX_MS", d.max_duration_ms),
-            partial_interval_ms: parse(&map, "OUTLOUD_PARTIAL_MS", d.partial_interval_ms),
-            window_ms: parse(&map, "OUTLOUD_WINDOW_MS", d.window_ms),
+            chunk_interval_ms: parse(&map, "OUTLOUD_CHUNK_MS", d.chunk_interval_ms),
             device_name: map
                 .get("OUTLOUD_MIC_DEVICE")
                 .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) }),
@@ -254,21 +228,15 @@ impl AudioConfig {
 pub enum AudioEvent {
     /// VAD detected speech start/stop.
     Vad(bool),
-    /// An interim snapshot of the in-progress utterance, emitted periodically
-    /// while the user is still speaking. Uses a sliding window of recent audio
-    /// (not the full buffer) to keep each request constant-size.
-    Partial {
-        samples: Vec<f32>,
-        sample_rate: u32,
-        window_start_ms: u64,
-        window_end_ms: u64,
-        seq: u64,
-    },
-    /// A complete utterance was captured.
-    Utterance {
+    /// A non-overlapping chunk of the in-progress utterance, emitted
+    /// periodically while the user is still speaking. Each chunk contains
+    /// samples that haven't been sent before. `is_final` is true for the
+    /// last chunk (triggered by silence or max duration).
+    Chunk {
         samples: Vec<f32>,
         sample_rate: u32,
         duration_ms: u64,
+        is_final: bool,
     },
     /// An error occurred.
     Error(String),
@@ -290,11 +258,6 @@ pub struct AudioCapture {
     stream_handle: Mutex<Option<StreamHandle>>,
     /// The device name for the **currently active** session.
     device_name: Mutex<Option<String>>,
-    /// Single-in-flight gate for partials, shared with the transcription
-    /// stage: claimed (compare-exchange) in the audio callback when a
-    /// partial is emitted, released by the transform once that partial has
-    /// been processed. While held, new partials are dropped at the source.
-    partial_gate: Arc<AtomicBool>,
 }
 
 /// Keeps a cpal stream alive in a background thread. Dropping this handle
@@ -329,16 +292,10 @@ fn resolve_device(name: Option<&str>) -> Result<(cpal::Device, String)> {
 impl AudioCapture {
     /// Create a new AudioCapture without opening any audio stream.
     ///
-    /// `partial_gate` is shared with the transcription stage: the audio
-    /// callback claims it when emitting a partial and the transform releases
-    /// it once that partial has been processed (see `GateGuard` in
-    /// `pipeline/transform.rs`).
-    ///
     /// Returns `(self, receiver)` — the receiver is handed to the pipeline
     /// at startup; all sessions write into the shared sender.
     pub fn new(
         config: AudioConfig,
-        partial_gate: Arc<AtomicBool>,
     ) -> (Self, mpsc::Receiver<AudioEvent>) {
         let (event_tx, event_rx) = mpsc::channel();
         (
@@ -347,7 +304,6 @@ impl AudioCapture {
                 event_tx,
                 stream_handle: Mutex::new(None),
                 device_name: Mutex::new(None),
-                partial_gate,
             },
             event_rx,
         )
@@ -402,12 +358,6 @@ impl AudioCapture {
         // Close any existing session first
         self.stop();
 
-        // Every session starts with a free partial gate. A partial from a
-        // previous session may still be in the pipeline and will release
-        // the gate again when it completes — harmless, since `latest_seq`
-        // in the transform discards stale results either way.
-        self.partial_gate.store(false, Ordering::Release);
-
         let (device, name) = resolve_device(device_name.or(self.config.device_name.as_deref()))
             .context("no input device available")?;
 
@@ -443,11 +393,9 @@ impl AudioCapture {
             threshold: self.config.vad_threshold,
             silence_dur: Duration::from_millis(self.config.silence_duration_ms),
             max_dur: Duration::from_millis(self.config.max_duration_ms),
-            partial_interval: self.config.partial_interval_ms,
-            window_ms: self.config.window_ms,
+            chunk_interval: self.config.chunk_interval_ms,
             sample_rate: stream_config.sample_rate,
             device_channels: stream_config.channels as usize,
-            partial_gate: self.partial_gate.clone(),
         };
 
         let tx_data = self.event_tx.clone();
@@ -542,18 +490,12 @@ struct CaptureParams {
     silence_dur: Duration,
     /// Maximum utterance length.
     max_dur: Duration,
-    /// How often to emit partials; zero disables them.
-    partial_interval: u64,
-    /// Sliding window size for partial transcription.
-    window_ms: u64,
+    /// How often to emit non-overlapping chunks; zero disables them.
+    chunk_interval: u64,
     /// The stream's sample rate (the device's native rate).
     sample_rate: u32,
     /// Number of channels on the device (pre-downmix).
     device_channels: usize,
-    /// Single-in-flight gate for partials, shared with the transcription
-    /// stage. Claimed with a compare-exchange when a partial is emitted;
-    /// released by the transform when that partial has been processed.
-    partial_gate: Arc<AtomicBool>,
 }
 
 /// Parse a sample format string forwarded in the `start_listening` request
@@ -643,7 +585,8 @@ fn handle_input<T>(
         st.was_speaking = true;
         st.speech_start = Some(Instant::now());
         st.last_speech = Instant::now();
-        st.last_partial = Instant::now();
+        st.last_chunk = Instant::now();
+        st.chunked_samples = 0;
         let _ = tx_data.send(AudioEvent::Vad(true));
     } else if is_speech {
         st.last_speech = Instant::now();
@@ -666,48 +609,40 @@ fn handle_input<T>(
             st.was_speaking = false;
             let _ = tx_data.send(AudioEvent::Vad(false));
 
-            let samples = std::mem::take(&mut st.buffer);
-            let duration_ms = (samples.len() as u64 * 1000) / params.sample_rate as u64;
-            let _ = tx_data.send(AudioEvent::Utterance {
-                samples,
+            // Flush any samples not yet emitted in a periodic chunk.
+            // is_final = true tells the client this is the last chunk.
+            if st.buffer.len() > st.chunked_samples {
+                let remaining = st.buffer[st.chunked_samples..].to_vec();
+                let duration_ms = (remaining.len() as u64 * 1000) / params.sample_rate as u64;
+                let _ = tx_data.send(AudioEvent::Chunk {
+                    samples: remaining,
+                    sample_rate: params.sample_rate,
+                    duration_ms,
+                    is_final: true,
+                });
+            }
+
+            std::mem::take(&mut st.buffer);
+            st.speech_start = None;
+        } else if params.chunk_interval > 0
+            && st.last_chunk.elapsed() >= Duration::from_millis(params.chunk_interval)
+            && st.buffer.len() > st.chunked_samples
+        {
+            // Non-overlapping chunk: emit all samples since the last chunk.
+            // Each sample is transcribed exactly once — no sliding window,
+            // no gate, no staleness checks.
+            st.last_chunk = Instant::now();
+
+            let chunk_end = st.buffer.len();
+            let chunk = st.buffer[st.chunked_samples..chunk_end].to_vec();
+            st.chunked_samples = chunk_end;
+
+            let duration_ms = (chunk.len() as u64 * 1000) / params.sample_rate as u64;
+            let _ = tx_data.send(AudioEvent::Chunk {
+                samples: chunk,
                 sample_rate: params.sample_rate,
                 duration_ms,
-            });
-
-            st.speech_start = None;
-        } else if params.partial_interval > 0
-            && st.last_partial.elapsed() >= Duration::from_millis(params.partial_interval)
-            && params
-                .partial_gate
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-        {
-            // Sliding window: only transcribe the most recent window_ms
-            // of audio, keeping each request constant-size.
-            //
-            // The compare-exchange above claimed the single-in-flight gate;
-            // the transcription stage releases it once this partial has been
-            // processed (see `GateGuard` in transform.rs). While the gate is
-            // held, newer partials are dropped here at the source: the
-            // latest window always wins and a slow STT backend cannot build
-            // up a backlog of stale windows.
-            st.last_partial = Instant::now();
-
-            let total_samples = st.buffer.len();
-            let window_samples = (params.window_ms as usize * params.sample_rate as usize) / 1000;
-            let window_start = total_samples.saturating_sub(window_samples);
-            let window = st.buffer[window_start..].to_vec();
-
-            let window_start_ms = (window_start as u64 * 1000) / params.sample_rate as u64;
-            let window_end_ms = (total_samples as u64 * 1000) / params.sample_rate as u64;
-
-            st.seq += 1;
-            let _ = tx_data.send(AudioEvent::Partial {
-                samples: window,
-                sample_rate: params.sample_rate,
-                window_start_ms,
-                window_end_ms,
-                seq: st.seq,
+                is_final: false,
             });
         }
     }
@@ -718,9 +653,10 @@ struct CaptureState {
     was_speaking: bool,
     last_speech: Instant,
     speech_start: Option<Instant>,
-    last_partial: Instant,
-    /// Monotonic sequence number for partial ordering.
-    seq: u64,
+    /// When the last chunk was emitted.
+    last_chunk: Instant,
+    /// Number of samples already emitted in chunks.
+    chunked_samples: usize,
 }
 
 impl CaptureState {
@@ -730,8 +666,8 @@ impl CaptureState {
             was_speaking: false,
             last_speech: Instant::now(),
             speech_start: None,
-            last_partial: Instant::now(),
-            seq: 0,
+            last_chunk: Instant::now(),
+            chunked_samples: 0,
         }
     }
 }

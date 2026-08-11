@@ -20,22 +20,23 @@ mod tests {
     use crate::protocol::BackendHealth;
 
     #[tokio::test]
-    async fn sink_sends_non_partial_then_idle() {
+    async fn sink_sends_final_chunk_then_idle() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<Event>(16);
         let mut sink = EventSink::new(event_tx, StatusTracker::new());
 
-        sink.consume(Event::Transcript {
+        sink.consume(Event::Chunk {
             text: "hello".into(),
             duration_ms: 100,
+            is_final: true,
         })
         .await
         .unwrap();
 
-        // Should receive the transcript followed by Idle status
+        // Should receive the final chunk followed by Idle status
         let event1 = event_rx.try_recv().unwrap();
         let event2 = event_rx.try_recv().unwrap();
 
-        assert!(matches!(event1, Event::Transcript { .. }));
+        assert!(matches!(event1, Event::Chunk { is_final: true, .. }));
         assert!(matches!(
             event2,
             Event::Status {
@@ -50,22 +51,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sink_sends_partial_without_idle() {
+    async fn sink_sends_non_final_chunk_without_idle() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<Event>(16);
         let mut sink = EventSink::new(event_tx, StatusTracker::new());
 
-        sink.consume(Event::Partial {
+        sink.consume(Event::Chunk {
             text: "interim".into(),
-            window_start_ms: 0,
-            window_end_ms: 5000,
-            seq: 1,
+            duration_ms: 5000,
+            is_final: false,
         })
         .await
         .unwrap();
 
-        // Should receive only the partial, no Idle status
+        // Should receive only the chunk, no Idle status
         let event1 = event_rx.try_recv().unwrap();
-        assert!(matches!(event1, Event::Partial { .. }));
+        assert!(matches!(event1, Event::Chunk { is_final: false, .. }));
 
         // Channel should be empty now
         assert!(event_rx.is_empty());
@@ -106,9 +106,10 @@ mod tests {
 
         // Sending should fail
         let result = sink
-            .consume(Event::Transcript {
+            .consume(Event::Chunk {
                 text: "hello".into(),
                 duration_ms: 100,
+                is_final: true,
             })
             .await;
 
@@ -120,14 +121,14 @@ impl Sink for EventSink {
     type Input = Event;
 
     async fn consume(&mut self, input: Event) -> Result<()> {
-        // Interim partials don't end the turn — emit them without the trailing
+        // Non-final chunks don't end the turn — emit them without the trailing
         // Idle status so the UI stays in its listening/transcribing state.
-        let is_partial = matches!(input, Event::Partial { .. });
+        let emit_idle = !matches!(&input, Event::Chunk { is_final: false, .. });
         self.event_tx
             .send(input)
             .await
             .map_err(|_| StreamSafeError::ChannelClosed)?;
-        if !is_partial {
+        if emit_idle {
             self.event_tx
                 .send(self.tracker.transition(State::Idle, None))
                 .await

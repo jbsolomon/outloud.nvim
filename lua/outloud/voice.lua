@@ -48,10 +48,8 @@ function Voice:_handle_line(line)
 	end
 
 	local event_type = data.type
-	if event_type == "transcript" and self.callbacks.transcript then
-		self.callbacks.transcript(data.text, data.duration_ms)
-	elseif event_type == "partial" and self.callbacks.partial then
-		self.callbacks.partial(data.text, data.window_start_ms, data.window_end_ms, data.seq)
+	if event_type == "chunk" and self.callbacks.chunk then
+		self.callbacks.chunk(data.text, data.duration_ms, data.is_final or false)
 	elseif event_type == "status" and self.callbacks.status then
 		self.callbacks.status(data.state, data.device, data.backend)
 	elseif event_type == "vad" and self.callbacks.vad then
@@ -190,14 +188,10 @@ function Voice:_send(cmd)
 	vim.fn.chansend(self.job_id, vim.json.encode(cmd) .. "\n")
 end
 
----@param callback fun(text: string, duration_ms: number)
-function Voice:on_transcript(callback)
-	self.callbacks.transcript = callback
-end
 
----@param callback fun(text: string)
-function Voice:on_partial(callback)
-	self.callbacks.partial = callback
+---@param callback fun(text: string, duration_ms: number)
+function Voice:on_chunk(callback)
+	self.callbacks.chunk = callback
 end
 
 ---@param callback fun(state: string, device: string?, backend: {status: string, error?: string})

@@ -170,16 +170,12 @@ local voice_default = Voice:new({})
 assert_eq(voice_default.daemon_cmd, "outloud", "default daemon_cmd is 'outloud'")
 
 -- Test callback registration
-local transcript_called = false
-local partial_called = false
+local chunk_called = false
 local status_called = false
 local error_called = false
 
-voice:on_transcript(function(text, duration_ms)
-  transcript_called = true
-end)
-voice:on_partial(function(text)
-  partial_called = true
+voice:on_chunk(function(text, duration_ms, is_final)
+  chunk_called = true
 end)
 voice:on_status(function(state)
   status_called = true
@@ -188,8 +184,7 @@ voice:on_error(function(message)
   error_called = true
 end)
 
-assert_type(voice.callbacks.transcript, "function", "transcript callback registered")
-assert_type(voice.callbacks.partial, "function", "partial callback registered")
+assert_type(voice.callbacks.chunk, "function", "chunk callback registered")
 assert_type(voice.callbacks.status, "function", "status callback registered")
 assert_type(voice.callbacks.error, "function", "error callback registered")
 
@@ -203,11 +198,8 @@ local test_voice = Voice:new({})
 
 local events = {}
 
-test_voice:on_transcript(function(text, duration_ms)
-  table.insert(events, { type = "transcript", text = text, duration_ms = duration_ms })
-end)
-test_voice:on_partial(function(text)
-  table.insert(events, { type = "partial", text = text })
+test_voice:on_chunk(function(text, duration_ms, is_final)
+  table.insert(events, { type = "chunk", text = text, duration_ms = duration_ms, is_final = is_final })
 end)
 test_voice:on_status(function(state, device, backend)
   table.insert(events, { type = "status", state = state, device = device, backend = backend })
@@ -229,22 +221,26 @@ test_voice:_handle_line(vim.json.encode({ type = "vad", speaking = true }))
 assert_eq(#events, 2, "two events after vad")
 assert_eq(events[2].speaking, true, "vad speaking is true")
 
--- Simulate partial transcripts (streaming)
-  test_voice:_handle_line(vim.json.encode({ type = "partial", text = "hello", window_start_ms = 0, window_end_ms = 5000, seq = 1 }))
-  test_voice:_handle_line(vim.json.encode({ type = "partial", text = "hello world", window_start_ms = 0, window_end_ms = 6000, seq = 2 }))
-assert_eq(#events, 4, "four events after partials")
-assert_eq(events[3].text, "hello", "first partial is 'hello'")
-assert_eq(events[4].text, "hello world", "second partial is 'hello world'")
+-- Simulate chunk transcripts (streaming)
+  test_voice:_handle_line(vim.json.encode({ type = "chunk", text = "hello", duration_ms = 5000, is_final = false }))
+  test_voice:_handle_line(vim.json.encode({ type = "chunk", text = " world", duration_ms = 5000, is_final = false }))
+assert_eq(#events, 4, "four events after chunks")
+assert_eq(events[3].text, "hello", "first chunk is 'hello'")
+assert_eq(events[3].is_final, false, "first chunk is not final")
+assert_eq(events[4].text, " world", "second chunk is ' world'")
+assert_eq(events[4].is_final, false, "second chunk is not final")
 
--- Simulate final transcript
+-- Simulate final chunk
 test_voice:_handle_line(vim.json.encode({
-  type = "transcript",
-  text = "hello world this is a test",
+  type = "chunk",
+  text = " this is a test",
   duration_ms = 1500,
+  is_final = true,
 }))
-assert_eq(#events, 5, "five events after transcript")
-assert_eq(events[5].text, "hello world this is a test", "transcript text correct")
-assert_eq(events[5].duration_ms, 1500, "transcript duration correct")
+assert_eq(#events, 5, "five events after final chunk")
+assert_eq(events[5].text, " this is a test", "final chunk text correct")
+assert_eq(events[5].duration_ms, 1500, "final chunk duration correct")
+assert_eq(events[5].is_final, true, "final chunk is final")
 
 -- Simulate an error event
 test_voice:_handle_line(vim.json.encode({ type = "error", message = "audio device not found" }))
@@ -441,11 +437,11 @@ section("6. Sidebar - Conversation Flow")
 local conv = Sidebar:new({ width = 48, position = "right", keys = {} })
 
 -- Simulate a partial transcript appearing
-conv:set_partial("hello world")
+conv:set_chunk("hello world")
 assert_ok(#conv.entries >= 1, "partial entry added")
 
 -- Update the partial
-conv:set_partial("hello world this is")
+conv:set_chunk("hello world this is")
 assert_ok(#conv.entries >= 1, "partial entry updated")
 
 -- Clear partial and begin a real turn
@@ -744,15 +740,11 @@ vim.api.nvim_set_current_buf(buf)
 -- Create a simulated voice instance
 local sim_voice = Voice:new({ daemon_cmd = "echo" })
 
-local transcript_results = {}
-local partial_results = {}
+local chunk_results = {}
 local status_results = {}
 
-sim_voice:on_transcript(function(text, duration_ms)
-  table.insert(transcript_results, { text = text, duration_ms = duration_ms })
-end)
-sim_voice:on_partial(function(text)
-  table.insert(partial_results, text)
+sim_voice:on_chunk(function(text, duration_ms, is_final)
+  table.insert(chunk_results, { text = text, duration_ms = duration_ms, is_final = is_final })
 end)
 sim_voice:on_status(function(state)
   table.insert(status_results, state)
@@ -769,19 +761,16 @@ local sim_events = {
   -- VAD: user starts speaking
   { type = "vad", speaking = true },
   
-  -- Partial transcripts stream in as user speaks
-  { type = "partial", text = "add a function", window_start_ms = 0, window_end_ms = 3000, seq = 1 },
-  { type = "partial", text = "add a function that sorts", window_start_ms = 0, window_end_ms = 5000, seq = 2 },
-  { type = "partial", text = "add a function that sorts the array", window_start_ms = 0, window_end_ms = 7000, seq = 3 },
+  -- Chunks arrive as user speaks
+  { type = "chunk", text = "add a function", duration_ms = 5000, is_final = false },
+  { type = "chunk", text = " that sorts", duration_ms = 5000, is_final = false },
+  { type = "chunk", text = " the array", duration_ms = 3000, is_final = true },
   
   -- VAD: user stops speaking
   { type = "vad", speaking = false },
   
   -- Transcribing
   { type = "status", state = "transcribing" },
-  
-  -- Final transcript
-  { type = "transcript", text = "add a function that sorts the array", duration_ms = 2300 },
   
   -- Back to idle
   { type = "status", state = "ready" },
@@ -799,17 +788,20 @@ assert_eq(status_results[2], "listening", "second status is 'listening'")
 assert_eq(status_results[3], "transcribing", "third status is 'transcribing'")
 assert_eq(status_results[4], "ready", "fourth status is 'ready'")
 
-assert_eq(#partial_results, 3, "received 3 partial transcripts")
-assert_eq(partial_results[1], "add a function", "first partial")
-assert_eq(partial_results[2], "add a function that sorts", "second partial")
-assert_eq(partial_results[3], "add a function that sorts the array", "third partial")
-
-assert_eq(#transcript_results, 1, "received 1 final transcript")
-assert_eq(transcript_results[1].text, "add a function that sorts the array", "final transcript text")
-assert_eq(transcript_results[1].duration_ms, 2300, "final transcript duration")
+assert_eq(#chunk_results, 3, "received 3 chunks")
+assert_eq(chunk_results[1].text, "add a function", "first chunk")
+assert_eq(chunk_results[1].is_final, false, "first chunk is not final")
+assert_eq(chunk_results[2].text, " that sorts", "second chunk")
+assert_eq(chunk_results[2].is_final, false, "second chunk is not final")
+assert_eq(chunk_results[3].text, " the array", "third chunk")
+assert_eq(chunk_results[3].is_final, true, "third chunk is final")
 
 -- Test buffer insertion (simulating what init.lua does)
-local test_text = transcript_results[1].text
+local test_text = table.concat({
+  chunk_results[1].text,
+  chunk_results[2].text,
+  chunk_results[3].text
+}, "")
 vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })  -- Start with empty buffer
 local line, col = 0, 0
@@ -1188,33 +1180,27 @@ assert_type(ls.defaults.accumulator.scratchpad_system, "string", "scratchpad_sys
 local sp = Accumulator:new({ mode = "scratchpad" })
 assert_type(sp, "table", "scratchpad accumulator instance is a table")
 assert_eq(sp.mode, "scratchpad", "mode is scratchpad")
-assert_eq(sp._iterating, false, "not iterating initially")
-assert_eq(sp._queued, nil, "no queue initially")
+assert_eq(sp._refining, false, "not refining initially")
+assert_eq(#sp._chunk_buffer, 0, "no chunks buffered initially")
 
--- Test scratchpad prompt building
-local sp_prompt = sp:_build_scratchpad_prompt("hello world")
-assert_type(sp_prompt, "string", "scratchpad prompt is a string")
-assert_ok(sp_prompt:find("<scratchpad>"), "prompt has scratchpad tag")
-assert_ok(sp_prompt:find("(empty)"), "prompt shows empty scratchpad")
-assert_ok(sp_prompt:find("<instruction>"), "prompt has instruction tag")
-assert_ok(sp_prompt:find("hello world"), "prompt contains utterance")
+-- Test scratchpad prompt template exists
+assert_type(sp.opts.scratchpad_system, "string", "scratchpad_system prompt template exists")
+assert_ok(sp.opts.scratchpad_system:find("<scratchpad>"), "prompt template has scratchpad tag")
+assert_ok(sp.opts.scratchpad_system:find("<instruction>"), "prompt template has instruction tag")
 
--- Test scratchpad prompt with existing content
-sp:append("first line of content")
-local sp_prompt2 = sp:_build_scratchpad_prompt("add more")
-assert_ok(sp_prompt2:find("first line of content"), "prompt contains existing scratchpad content")
-assert_ok(sp_prompt2:find("add more"), "prompt contains new instruction")
-
--- Test iterate with no handler (falls back to direct append)
+-- Test append with no handler (falls back to direct merge)
 sp:clear()
-local iter_result, iter_ok = await_cb(function(cb)
-	sp:iterate("test utterance", cb)
-end)
-assert_ok(iter_ok, "iterate callback fired")
-assert_eq(iter_result, "test utterance", "iterate with no handler falls back to append")
-assert_eq(sp._iterating, false, "gate is clear after iterate with no handler")
+sp:append("test utterance")
+assert_eq(sp.text, "test utterance", "fallback merge appends text")
+assert_eq(sp._refining, false, "gate is clear after fallback")
 
--- Test iterate with custom function handler
+-- Test append with no handler (falls back to direct merge)
+sp:clear()
+sp:append("test utterance")
+assert_eq(sp.text, "test utterance", "fallback merge appends text")
+assert_eq(sp._refining, false, "gate is clear after fallback")
+
+-- Test append with custom function handler
 local sp_handler = Accumulator:new({
 	mode = "scratchpad",
 	handler = {
@@ -1229,43 +1215,30 @@ local sp_handler = Accumulator:new({
 	},
 })
 
--- First iteration (empty scratchpad, no partials)
-local result1, ok1 = await_cb(function(cb)
-	sp_handler:iterate("write a function", cb)
-end)
-assert_ok(ok1, "first iteration callback fired")
-assert_eq(result1, "LLM transformed: write a function", "first iteration transforms utterance")
-assert_eq(sp_handler.text, "LLM transformed: write a function", "scratchpad text updated")
-assert_eq(sp_handler._iterating, false, "gate is clear after first iteration")
-assert_eq(sp_handler._partial_text, "", "partials cleared after iteration")
+-- First chunk (empty scratchpad)
+sp_handler:append("write a function")
+assert_eq(sp_handler.text, "LLM transformed: write a function", "first chunk transforms utterance")
+assert_eq(sp_handler._refining, false, "gate is clear after first chunk")
 
--- Second iteration (scratchpad has content)
-local result2, ok2 = await_cb(function(cb)
-	sp_handler:iterate("add error handling", cb)
-end)
-assert_ok(ok2, "second iteration callback fired")
-assert_eq(result2, "LLM transformed: write a function + add error handling", "second iteration appends to scratchpad")
-assert_eq(sp_handler.text, "LLM transformed: write a function + add error handling", "scratchpad text updated again")
+-- Second chunk (scratchpad has content)
+sp_handler:append("add error handling")
+assert_eq(sp_handler.text, "LLM transformed: write a function + add error handling", "second chunk appends to scratchpad")
 
--- Third iteration (simulating "delete that line")
-local result3, ok3 = await_cb(function(cb)
-	sp_handler:iterate("remove the error handling part", cb)
-end)
-assert_ok(ok3, "third iteration callback fired")
-assert_eq(result3, "LLM transformed: write a function + add error handling + remove the error handling part", "third iteration continues building")
+-- Third chunk
+sp_handler:append("remove the error handling part")
+assert_eq(sp_handler.text, "LLM transformed: write a function + add error handling + remove the error handling part", "third chunk continues building")
 
 sp_handler:dispose()
 
--- Test iterate with empty/nil utterance (no-op)
+-- Test append with empty/nil (no-op)
 sp:clear()
-local noop_called = false
-sp:iterate("", function() noop_called = true end)
-assert_eq(noop_called, false, "empty utterance does not iterate")
-sp:iterate(nil, function() noop_called = true end)
-assert_eq(noop_called, false, "nil utterance does not iterate")
+sp:append("")
+assert_eq(sp.text, "", "empty append is no-op")
+sp:append(nil)
+assert_eq(sp.text, "", "nil append is no-op")
 
--- Test queuing: simulate concurrent iterations
-local queue_acc = Accumulator:new({
+-- Test chunk buffering: simulate in-flight refinement
+local buffer_acc = Accumulator:new({
 	mode = "scratchpad",
 	handler = {
 		fn = function(utterance, ctx)
@@ -1275,26 +1248,27 @@ local queue_acc = Accumulator:new({
 })
 
 -- Manually set gate to simulate in-flight LLM call
-queue_acc._iterating = true
+buffer_acc._refining = true
 
--- Queue two utterances
-queue_acc:iterate("utterance A")
-assert_ok(queue_acc._queued ~= nil, "queue created")
-assert_eq(#queue_acc._queued, 1, "one item queued")
+-- Buffer two chunks
+buffer_acc:append("chunk A")
+assert_eq(#buffer_acc._chunk_buffer, 1, "one chunk buffered")
 
-queue_acc:iterate("utterance B")
-assert_eq(#queue_acc._queued, 2, "two items queued")
+buffer_acc:append("chunk B")
+assert_eq(#buffer_acc._chunk_buffer, 2, "two chunks buffered")
 
--- Clear the gate and process first queued item
-queue_acc._iterating = false
-local first_result, first_ok = await_cb(function(cb)
-	queue_acc:iterate("utterance C", cb)
+-- Simulate refinement completing with buffered chunks
+buffer_acc.text = "base content"
+buffer_acc._refining = false
+buffer_acc:_apply_refinement("refined base")
+-- _apply_refinement drains _chunk_buffer via vim.schedule, so yield to let it process
+vim.wait(500, function()
+    return buffer_acc.text == "refined base | chunk A chunk B"
 end)
-assert_ok(first_ok, "queued iterate callback fired")
--- _drain_queue processes C first (pushed last), then A and B from queue
-assert_eq(first_result, " | utterance A | utterance B | utterance C", "all queued items processed")
+assert_eq(buffer_acc.text, "refined base | chunk A chunk B", "buffered chunks were processed")
+assert_eq(buffer_acc._refining, false, "gate is clear after buffer drain")
 
-queue_acc:dispose()
+buffer_acc:dispose()
 sp:dispose()
 
 -- Test scratchpad mode in config
@@ -1337,25 +1311,15 @@ local mock_cc = {
 local original_cc = package.loaded["CodeCompanion"]
 package.loaded["CodeCompanion"] = mock_cc
 
--- Test iterate with handler.name calls CodeCompanion.chat with correct API
-local cc_iterate_acc = Accumulator:new({
+-- Test append with handler.name calls CodeCompanion.chat with correct API
+local cc_acc = Accumulator:new({
     mode = "scratchpad",
     handler = { name = "local-llama.cpp" },
 })
-cc_iterate_acc:append("existing scratchpad content")
-
-local iterate_complete_called = false
-local _cc_result, _cc_ok = await_cb(function(cb)
-    cc_iterate_acc:iterate("add a new function", function(text)
-        iterate_complete_called = true
-        cb(text)
-    end)
-end)
-assert_ok(_cc_ok, "iterate callback fired for CodeCompanion test")
-assert_eq(_cc_result, "refined scratchpad content", "iterate response correctly extracted from llm role")
+cc_acc:append("existing scratchpad content")
 
 -- Verify the accumulator called CodeCompanion.chat (not some other API)
-assert_ok(captured_chat_args ~= nil, "iterate with handler.name calls CodeCompanion.chat")
+assert_ok(captured_chat_args ~= nil, "append with handler.name calls CodeCompanion.chat")
 
 -- Verify it uses the correct CodeCompanion API structure
 assert_type(captured_chat_args.params, "table", "chat args has params table")
@@ -1387,17 +1351,21 @@ if captured_chat_args.messages then
     local msg_content = captured_chat_args.messages[1].content
     assert_ok(msg_content:find("<scratchpad>"), "message contains scratchpad tag")
     assert_ok(msg_content:find("<instruction>"), "message contains instruction tag")
-    assert_ok(msg_content:find("add a new function"), "message contains the utterance")
+    assert_ok(msg_content:find("existing scratchpad content"), "message contains the utterance")
 else
     assert_ok(false, "message contains scratchpad tag (messages is nil)")
     assert_ok(false, "message contains instruction tag (messages is nil)")
     assert_ok(false, "message contains the utterance (messages is nil)")
 end
 
-assert_ok(iterate_complete_called, "on_completed callback was called")
-assert_eq(cc_iterate_acc._iterating, false, "gate is clear after callback")
+assert_ok(captured_chat_callback ~= nil, "on_completed callback was called")
+-- on_completed is vim.schedule_wrap, so _refining clears async
+vim.wait(500, function()
+    return cc_acc._refining == false
+end)
+assert_eq(cc_acc._refining, false, "gate is clear after callback")
 
-cc_iterate_acc:dispose()
+cc_acc:dispose()
 
 -- Test confirm with handler.name also uses correct CodeCompanion API
 captured_chat_args = nil
@@ -1447,14 +1415,22 @@ local error_acc = Accumulator:new({
 })
 error_acc.text = "refined content from previous iteration"
 
+-- on_error is vim.schedule_wrap, so _fallback_refine runs asynchronously.
+-- Poll for _refining to clear via scheduled callbacks (picked up by await_cb event loop).
 local error_result, error_ok = await_cb(function(cb)
-    error_acc:iterate("add something", function(text)
-        cb(text)
-    end)
+    error_acc:append("add something")
+    local function poll()
+        if not error_acc._refining then
+            cb(error_acc.text)
+        else
+            vim.schedule(poll)
+        end
+    end
+    vim.schedule(poll)
 end)
 assert_ok(error_ok, "error fallback callback fired")
 assert_eq(error_result, "refined content from previous iteration\nadd something", "error fallback appends utterance to existing scratchpad")
-assert_eq(error_acc._iterating, false, "gate is clear after error fallback")
+assert_eq(error_acc._refining, false, "gate is clear after error fallback")
 
 error_acc:dispose()
 
@@ -1468,13 +1444,11 @@ local fallback_acc = Accumulator:new({
 })
 fallback_acc:append("fallback text")
 local fallback_result, fallback_ok = await_cb(function(cb)
-    fallback_acc:iterate("utterance", function(text)
-        fallback_result = text
-        cb(text)
-    end)
+    fallback_acc:append("utterance")
+    cb(fallback_acc.text)
 end)
-assert_ok(fallback_ok, "fallback iterate callback fired")
-assert_eq(fallback_result, "fallback text\nutterance", "missing CodeCompanion falls back to direct append")
+assert_ok(fallback_ok, "fallback append callback fired")
+assert_eq(fallback_result, "fallback text utterance", "missing CodeCompanion falls back to direct append")
 
 fallback_acc:dispose()
 
@@ -1529,41 +1503,61 @@ local mock_cc_reuse = {
 
 package.loaded["CodeCompanion"] = mock_cc_reuse
 
--- First iterate: creates a new chat
+-- First append: creates a new chat
 local reuse_acc = Accumulator:new({
     mode = "scratchpad",
     handler = { name = "local-llama.cpp" },
 })
-reuse_acc:append("initial scratchpad")
-
-local first_result, first_ok = await_cb(function(cb)
-    reuse_acc:iterate("first utterance", function(text) cb(text) end)
+-- Wait for first refinement: on_completed is vim.schedule_wrap, so _cc_chat is set async.
+await_cb(function(cb)
+    reuse_acc:append("initial scratchpad")
+    local function poll()
+        if reuse_acc._cc_chat ~= nil and not reuse_acc._refining then
+            cb()
+        else
+            vim.schedule(poll)
+        end
+    end
+    vim.schedule(poll)
 end)
-assert_ok(first_ok, "first iterate callback fired")
-assert_eq(chat_create_count, 1, "first iterate creates exactly one chat")
-assert_ok(reuse_acc._cc_chat ~= nil, "chat stored for reuse after first iterate")
-assert_ok(vim.api.nvim_buf_is_valid(reuse_acc._cc_chat.bufnr), "stored chat buffer is valid")
+assert_ok(reuse_acc._cc_chat ~= nil, "first append created a chat session")
 
--- Second iterate: should reuse the existing chat (add_message + submit)
+-- Second append: should reuse the existing chat (add_message + submit)
 chat_create_count = 1 -- reset to verify no new chat is created
 local second_result, second_ok = await_cb(function(cb)
-    reuse_acc:iterate("second utterance", function(text) cb(text) end)
+    reuse_acc:append("second utterance")
+    local function poll()
+        if not reuse_acc._refining then
+            cb(reuse_acc.text)
+        else
+            vim.schedule(poll)
+        end
+    end
+    vim.schedule(poll)
 end)
-assert_ok(second_ok, "second iterate callback fired")
-assert_eq(chat_create_count, 1, "second iterate does NOT create a new chat")
-assert_eq(#add_message_calls, 1, "second iterate calls add_message once")
+assert_ok(second_ok, "second append callback fired")
+assert_eq(chat_create_count, 1, "second append does NOT create a new chat")
+assert_eq(#add_message_calls, 1, "second append calls add_message once")
 assert_eq(add_message_calls[1].role, "user", "add_message called with user role")
 assert_ok(add_message_calls[1].content:find("second utterance"), "add_message contains the new utterance")
-assert_eq(submit_calls, 1, "second iterate calls submit once")
+assert_eq(submit_calls, 1, "second append calls submit once")
 
--- Third iterate: still reuses the same chat
+-- Third append: still reuses the same chat
 local third_result, third_ok = await_cb(function(cb)
-    reuse_acc:iterate("third utterance", function(text) cb(text) end)
+    reuse_acc:append("third utterance")
+    local function poll()
+        if not reuse_acc._refining then
+            cb(reuse_acc.text)
+        else
+            vim.schedule(poll)
+        end
+    end
+    vim.schedule(poll)
 end)
-assert_ok(third_ok, "third iterate callback fired")
-assert_eq(chat_create_count, 1, "third iterate still uses the original chat")
-assert_eq(#add_message_calls, 2, "third iterate calls add_message again")
-assert_eq(submit_calls, 2, "third iterate calls submit again")
+assert_ok(third_ok, "third append callback fired")
+assert_eq(chat_create_count, 1, "third append still uses the original chat")
+assert_eq(#add_message_calls, 2, "third append calls add_message again")
+assert_eq(submit_calls, 2, "third append calls submit again")
 
 reuse_acc:dispose()
 
@@ -1922,9 +1916,10 @@ local acc_sp = Accumulator:new({ mode = "scratchpad" })
 assert_eq(acc_sp._scratchpad, nil, "scratchpad not created until toggle_scratchpad")
 acc_sp:append("some content")
 assert_eq(acc_sp._scratchpad, nil, "scratchpad still not created after append")
--- In scratchpad mode, append() writes to _partial_text, not self.text
-assert_eq(acc_sp._partial_text, "some content", "partial accumulated separately")
-assert_eq(acc_sp.text, "", "refined text is empty until iteration")
+-- In scratchpad mode with no handler, append() triggers _fallback_refine synchronously
+-- so self.text is set immediately (no _partial_text field exists)
+assert_eq(acc_sp.text, "some content", "fallback refine sets text synchronously")
+assert_eq(acc_sp._refining, false, "gate is clear after synchronous fallback")
 
 -- First toggle creates scratchpad and opens it
 acc_sp:toggle_scratchpad()
@@ -1941,23 +1936,22 @@ acc_sp:toggle_scratchpad()
 assert_eq(acc_sp._scratchpad, sp_before, "same scratchpad instance reused")
 assert_eq(acc_sp._scratchpad:is_open(), true, "scratchpad open after third toggle")
 
--- Verify the scratchpad buffer shows refined text (empty, since no iteration yet)
+-- Verify the scratchpad buffer shows the current text (already set by fallback)
 local acc_sp_buf = acc_sp._scratchpad.win.buf
 local acc_sp_lines = vim.api.nvim_buf_get_lines(acc_sp_buf, 0, -1, false)
-assert_eq(table.concat(acc_sp_lines, "\n"), "", "scratchpad shows empty refined text before iteration")
+assert_eq(table.concat(acc_sp_lines, "\n"), "some content", "scratchpad shows text set by fallback refine")
 
 -- Simulate iteration: set self.text to simulate LLM response
 acc_sp.text = "refined content"
-acc_sp._partial_text = ""
 acc_sp:_refresh_buf()
 acc_sp_lines = vim.api.nvim_buf_get_lines(acc_sp_buf, 0, -1, false)
 assert_eq(table.concat(acc_sp_lines, "\n"), "refined content", "scratchpad shows refined content after iteration")
 
--- Test that new partials don't overwrite refined text
+-- New append triggers another refinement (no handler → fallback merge with existing text)
 acc_sp:append("new partial")
 acc_sp_lines = vim.api.nvim_buf_get_lines(acc_sp_buf, 0, -1, false)
-assert_eq(table.concat(acc_sp_lines, "\n"), "refined content", "scratchpad still shows refined text after partial append")
-assert_eq(acc_sp._partial_text, "new partial", "partial accumulated separately")
+assert_eq(table.concat(acc_sp_lines, "\n"), "refined content\nnew partial", "scratchpad shows merged text after new append")
+assert_eq(acc_sp.text, "refined content\nnew partial", "text reflects fallback merge")
 
 -- Test dispose cleans up scratchpad
 acc_sp:dispose()

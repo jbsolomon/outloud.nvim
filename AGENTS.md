@@ -16,7 +16,7 @@ Mic → whisper-server (local STT) → transcript → inserted at cursor
 
 No cloud STT. No TTS. Local-only. You speak, text appears.
 
-**Current version:** 0.6.0 (July 2026)
+**Current version:** 0.8.0 (August 2026)
 **License:** Apache 2.0
 **Repository:** github.com/jbsolomon/outloud.nvim
 
@@ -201,7 +201,7 @@ nvim --headless -l tests/verify.lua
 | `OUTLOUD_VAD_THRESHOLD` | `0.01` | RMS energy threshold |
 | `OUTLOUD_SILENCE_MS` | `400` | Trailing silence before finalization |
 | `OUTLOUD_MAX_MS` | `30000` | Max utterance length |
-| `OUTLOUD_PARTIAL_MS` | `700` | Partial transcript interval (0 = disabled) |
+| `OUTLOUD_CHUNK_MS` | `5000` | Chunk interval (0 = disabled, only final on silence) |
 
 ---
 
@@ -216,9 +216,11 @@ nvim --headless -l tests/verify.lua
 
 ## Things to Be Careful About
 
-1. **The SPEC and README are partially outdated** — They describe the full ACP agent integration. The actual code is transcription-only. Trust the code.
-2. **`partial_gate` is single-in-flight** — The `GateGuard` in `transform.rs` clears the gate on drop. The `modes-plan.md` describes making this a bounded semaphore for concurrent partials.
-3. **Sidebar buffer is unlisted** — The sidebar uses `nvim_create_buf(false, true)`. It is cleaned up on `dispose()`.
-4. **STT server is managed by the plugin** — `install.lua` spawns `whisper-server` (default) or `llama-server` (openai backend), probes health, and detects stalls. External server mode (`model.server_url`) skips this.
-5. **No agent config in current code** — `init.lua` has no `agent` section in defaults. The `README.md` and `SPEC.md` still document it.
-6. **Snapshot commands warn** — `:OutloudUndo`, `:OutloudSnapshots`, `:OutloudSnapshotsPrune` emit warnings rather than doing anything.
+1. **Bump the workspace version on every daemon protocol change** — `install.lua`'s `needs_rebuild()` only compares the `Cargo.toml` version against `outloud --version`. A protocol change without a version bump leaves stale binaries on user machines: the plugin speaks the new protocol to a daemon that speaks the old one, and the UI silently misbehaves (e.g. the sidebar stuck on "initializing..." because pre-0.7.0 status events carry no backend health). Protocol extensions are minor version bumps.
+2. **The SPEC and README are partially outdated** — They describe the full ACP agent integration. The actual code is transcription-only. Trust the code.
+3. **Audio capture uses the device-native format** — The cpal stream is opened with the device's own channel count and sample rate (`default_input_config`). WASAPI shared mode rejects anything else (`StreamConfigNotSupported`); downmixing to mono happens in the stream callback.
+4. **`partial_gate` is single-in-flight** — The `GateGuard` in `transform.rs` clears the gate on drop. The `modes-plan.md` describes making this a bounded semaphore for concurrent partials.
+5. **Sidebar buffer is unlisted** — The sidebar uses `nvim_create_buf(false, true)`. It is cleaned up on `dispose()`.
+6. **STT server is managed by the plugin** — `install.lua` spawns `whisper-server` (default) or `llama-server` (openai backend), probes health, and detects stalls. External server mode (`model.server_url`) skips this.
+7. **No agent config in current code** — `init.lua` has no `agent` section in defaults. The `README.md` and `SPEC.md` still document it.
+8. **Snapshot commands warn** — `:OutloudUndo`, `:OutloudSnapshots`, `:OutloudSnapshotsPrune` emit warnings rather than doing anything.

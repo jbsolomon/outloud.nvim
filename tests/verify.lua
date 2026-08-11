@@ -100,8 +100,9 @@ assert_ok(type(Voice.start) == "function", "Voice:start()")
 assert_ok(type(Voice.stop) == "function", "Voice:stop()")
 assert_ok(type(Voice.start_listening) == "function", "Voice:start_listening()")
 assert_ok(type(Voice.stop_listening) == "function", "Voice:stop_listening()")
-assert_ok(type(Voice.on_transcript) == "function", "Voice:on_transcript()")
-assert_ok(type(Voice.on_partial) == "function", "Voice:on_partial()")
+assert_ok(type(Voice.on_chunk) == "function", "Voice:on_chunk()")
+assert_ok(Voice.on_transcript == nil, "Voice:on_transcript() removed")
+assert_ok(Voice.on_partial == nil, "Voice:on_partial() removed")
 
 --- 4. Sidebar class
 section("Sidebar UI")
@@ -114,7 +115,8 @@ assert_ok(type(Sidebar.close) == "function", "Sidebar:close()")
 assert_ok(type(Sidebar.set_state) == "function", "Sidebar:set_state()")
 assert_ok(type(Sidebar.set_status) == "function", "Sidebar:set_status()")
 assert_ok(type(Sidebar.begin_turn) == "function", "Sidebar:begin_turn()")
-assert_ok(type(Sidebar.set_partial) == "function", "Sidebar:set_partial()")
+assert_ok(type(Sidebar.set_chunk) == "function", "Sidebar:set_chunk()")
+assert_ok(Sidebar.set_partial == nil, "Sidebar:set_partial() removed")
 
 -- Agent methods should NOT exist on sidebar
 assert_ok(Sidebar.append_message == nil, "Sidebar:append_message() removed")

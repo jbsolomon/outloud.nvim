@@ -7,14 +7,11 @@ local M = {}
 --- with :VoiceConfirmBuf, which delegates to a CodeCompanion handler (or custom
 --- function) that transforms the voice input into buffer edits.
 ---
---- In **scratchpad mode** (`mode = "scratchpad"`), each transcript chunk is sent
---- to the LLM together with the current scratchpad content. The LLM returns an
---- updated scratchpad, which replaces the accumulator text. This enables iterative
---- refinement: the user can say "add a function", then "no, delete that line",
---- and the LLM evaluates each instruction against the evolving scratchpad.
----
---- Orthogonal to sliding window mode — you can use accumulator alone or
---- combined with sliding window partials.
+--- In **scratchpad mode** (`mode = "scratchpad"`), chunks buffer while
+--- refinements are running. If a refinement finishes while there are chunks
+--- buffered, the remaining chunks are sent for further refinement. Otherwise,
+--- if no refinement is running and any chunk arrives, it triggers a refinement.
+--- `is_final` is informational only — processing is the same for all chunks.
 ---
 ---@class outloud.Accumulator
 ---@field buf number?           temp buffer holding accumulated text
@@ -22,14 +19,10 @@ local M = {}
 ---@field chunks string[]       raw transcript chunks in order
 ---@field text string           joined accumulated text
 ---@field mode string           "hidden" | "preview" | "scratchpad"
----@field _partial_text string   raw partial text accumulated since last iteration (scratchpad mode only)
----@field _iterating boolean    gate to prevent concurrent LLM calls
+---@field _refining boolean     gate to prevent concurrent LLM calls
+---@field _chunk_buffer string[] chunks buffered while refinement is in flight
 ---@field _scratchpad Scratchpad?  floating preview window
 ---@field _cc_chat table?         CodeCompanion chat object (reused across refinements)
----@field _pending_instruction string?  instruction currently being processed by LLM (for error fallback)
----@field _pending_fragments string[]  fragments accumulated while LLM is processing or during post-result delay
----@field _delay_timer userdata?  timer for the post-result accumulation delay
----@field _silence_timer userdata?  timer for silence-based flush (1s pause triggers refinement)
 local Accumulator = {}
 Accumulator.__index = Accumulator
 
@@ -46,7 +39,6 @@ local DEFAULT_OPTS = {
 		diagnostics = false,
 		filename = true,
 	},
-	immediate_triggers = {"undo", "delete", "remove", "fix"},
 	-- Scratchpad system prompt (customizable)
 	scratchpad_system = [[You are editing a scratch pad. The user speaks instructions and you maintain the scratch pad content.
 
@@ -72,31 +64,32 @@ function Accumulator:new(opts)
 		win = nil,
 		chunks = {},
 		text = "",
-		_partial_text = "",
 		mode = opts.mode,
 		opts = opts,
-		_iterating = false,
-		_augroup = nil,
+		_refining = false,
+		_chunk_buffer = {},
 		_scratchpad = nil,
 		_cc_chat = nil,
-		_pending_instruction = nil,
-		_pending_fragments = {},
-		_delay_timer = nil,
-		_silence_timer = nil,
 	}, Accumulator)
 end
 
 --- Append a transcript chunk to the accumulation.
---- In scratchpad mode, partials go to `_partial_text` (hidden from scratchpad preview,
---- sent as context to the LLM on next iteration). In other modes, appends to `self.text`.
+--- In scratchpad mode, chunks buffer while refining, or trigger a refinement
+--- when idle. In other modes, appends directly to `self.text`.
 ---@param text string
-function Accumulator:append(text)
+---@param is_final? boolean  true if this is the last chunk for the utterance
+function Accumulator:append(text, is_final)
 	if not text or text == "" then
 		return
 	end
 	if self.mode == "scratchpad" then
-		-- Scratchpad mode: accumulate partials separately from refined text
-		self._partial_text = self._partial_text ~= "" and (self._partial_text .. " " .. text) or text
+		if self._refining then
+			-- Buffer the chunk — it will be processed when refinement completes
+			table.insert(self._chunk_buffer, text)
+		else
+			-- No refinement in flight: trigger one with this chunk
+			self:_refine(text)
+		end
 	else
 		-- Classic mode: append directly to text
 		self.chunks[#self.chunks + 1] = text
@@ -109,8 +102,122 @@ end
 function Accumulator:clear()
 	self.chunks = {}
 	self.text = ""
-	self._partial_text = ""
+	self._chunk_buffer = {}
 	self:_refresh_buf()
+end
+
+--- Send combined instruction text to the LLM for scratchpad refinement.
+--- Sets _refining = true, dispatches to CodeCompanion (or handler.fn, or fallback),
+--- and clears _refining on completion. If _chunk_buffer has items, triggers
+--- another refinement with the buffered chunks.
+---@param instruction string  the instruction text to send
+function Accumulator:_refine(instruction)
+	self._refining = true
+
+	local prompt = string.format(self.opts.scratchpad_system, self.text or "(empty)", instruction)
+
+	-- Update scratchpad preview so user sees "refining" state
+	self:_refresh_buf()
+
+	local handler = self.opts.handler
+
+	-- Try CodeCompanion first if handler.name is set
+	if handler and handler.name then
+		local ok, cc = pcall(require, "CodeCompanion")
+		if ok and cc.chat then
+			vim.notify("[outloud] scratchpad: refining with CodeCompanion", vim.log.levels.INFO)
+
+			if self._cc_chat and vim.api.nvim_buf_is_valid(self._cc_chat.bufnr) then
+				-- Reuse existing chat session
+				vim.notify("[outloud] scratchpad: sending follow-up in existing session", vim.log.levels.INFO)
+
+				local _self = self
+				self._cc_chat.callbacks.on_completed = {vim.schedule_wrap(function(chat)
+					local response_text = ""
+					if chat and chat.messages then
+						for _, msg in ipairs(chat.messages) do
+							if msg.role == "llm" then
+								response_text = msg.content or ""
+							end
+						end
+					end
+					_self:_apply_refinement(response_text)
+				end)}
+
+				self._cc_chat:add_message({ role = "user", content = prompt })
+				self._cc_chat:submit({ auto_submit = true })
+			else
+				-- Create a new chat session
+				cc.chat({
+					params = { adapter = handler.name },
+					messages = { { role = "user", content = prompt } },
+					auto_submit = true,
+					hidden = true,
+					callbacks = {
+						on_completed = vim.schedule_wrap(function(chat)
+							self._cc_chat = chat
+							local response_text = ""
+							if chat and chat.messages then
+								for _, msg in ipairs(chat.messages) do
+									if msg.role == "llm" then
+										response_text = msg.content or ""
+									end
+								end
+							end
+							self:_apply_refinement(response_text)
+						end),
+						on_error = vim.schedule_wrap(function(_, err_msg)
+							vim.notify("[outloud] CodeCompanion error: " .. tostring(err_msg or "unknown"), vim.log.levels.WARN)
+							self:_fallback_refine(instruction)
+						end),
+					},
+				})
+			end
+			return
+		end
+		vim.notify("[outloud] CodeCompanion not available, falling back to direct merge", vim.log.levels.WARN)
+	end
+
+	-- Custom function handler
+	if handler and handler.fn then
+		local result = handler.fn(instruction, { scratchpad = self.text })
+		if result and type(result) == "string" then
+			self:_apply_refinement(result)
+			return
+		end
+	end
+
+	-- No handler — fall back to plain-text merge
+	self:_fallback_refine(instruction)
+end
+
+--- Fallback: merge instruction directly into scratchpad text without LLM.
+---@param instruction string
+function Accumulator:_fallback_refine(instruction)
+	self.text = self.text ~= "" and (self.text .. "\n" .. instruction) or instruction
+	self:_apply_refinement(self.text)
+end
+
+--- Apply the LLM response: update scratchpad text, refresh buffer, yank to register,
+--- then check for buffered chunks and trigger further refinement if needed.
+---@param text string  the new scratchpad content
+function Accumulator:_apply_refinement(text)
+	self.text = text
+	self._refining = false
+	self:_refresh_buf()
+
+	-- Yank refined content to register so user can paste immediately
+	local reg = self.opts.register or "o"
+	vim.fn.setreg(reg, text)
+
+	-- If chunks were buffered while we were refining, combine them and refine again
+	if #self._chunk_buffer > 0 then
+		local buffered = table.concat(self._chunk_buffer, " ")
+		self._chunk_buffer = {}
+		vim.schedule(function()
+			self:_refine(buffered)
+		end)
+	end
 end
 
 --- Gather context from the current buffer for the handler.
@@ -133,7 +240,6 @@ function Accumulator:_gather_context()
 	if ctx.selection and vim.fn.mode() == "v" then
 		local start_pos = vim.fn.getpos("v")
 		local end_pos = vim.fn.getpos(".")
-		-- Normalize to (line, col) 0-indexed
 		local sline = math.min(start_pos[2], end_pos[2]) - 1
 		local schar = math.min(start_pos[3], end_pos[3]) - 1
 		local eline = math.max(start_pos[2], end_pos[2]) - 1
@@ -198,233 +304,6 @@ function Accumulator:_build_prompt(context)
 	return table.concat(parts, "\n")
 end
 
---- Build a scratchpad prompt: current scratchpad content + accumulated partials + latest utterance.
---- The LLM sees the refined scratchpad, any raw partial text, and the new instruction.
---- Used in scratchpad mode for iterative LLM refinement.
----@param utterance string  the latest transcript chunk (final transcript)
----@return string
-function Accumulator:_build_scratchpad_prompt(utterance)
-	-- Combine partials with the final utterance for the instruction
-	local instruction = self._partial_text ~= "" and (self._partial_text .. " " .. utterance) or utterance
-	return string.format(self.opts.scratchpad_system, self.text or "(empty)", instruction)
-end
-
---- Iterate the scratchpad: send (current content + latest utterance) to the LLM,
---- and replace the scratchpad with the LLM's response.
----
---- This is the core of scratchpad mode. Each utterance is treated as an
---- instruction to update the scratch pad. The LLM sees the full scratch pad
---- state and the latest instruction, and returns the revised scratch pad.
----
---- If an LLM call is already in flight (_iterating gate), the utterance is
---- queued and will be processed after the current call completes. Only one
---- queued item is ever dispatched at a time, and each is scheduled via
---- vim.schedule so the Neovim event loop stays responsive.
----@param utterance string  the latest transcript chunk
----@param on_complete? fun(text: string) callback with the updated scratchpad text
-function Accumulator:iterate(utterance, on_complete)
-	if not utterance or utterance == "" then
-		return
-	end
-
-	-- If already iterating, queue the utterance for after the current call
-	if self._iterating then
-		if not self._queued then
-			self._queued = {}
-		end
-		table.insert(self._queued, { utterance = utterance, on_complete = on_complete })
-		return
-	end
-
-	self._iterating = true
-	-- Push the initial utterance onto the queue so _drain_queue can pick it up
-	if not self._queued then
-		self._queued = {}
-	end
-	table.insert(self._queued, { utterance = utterance, on_complete = on_complete })
-	vim.schedule(function()
-		self:_drain_queue()
-	end)
-end
-
---- Dispatch the next item from the queue (or the current utterance if the
---- queue is empty). Called from `iterate()` and recursively from
---- `_apply_scratchpad_update` — always via vim.schedule so the event loop
---- stays responsive between LLM calls.
----
---- In scratchpad mode with CodeCompanion, the first utterance creates a
---- hidden chat session stored in `_cc_chat`. Subsequent utterances are sent
---- as follow-up messages to the *same* chat via `chat:send()`, preserving
---- conversation context without session proliferation.
-function Accumulator:_drain_queue()
-	-- Pick the next utterance: first from queue, then fall back to the one
-	-- that triggered the original `iterate()` call (stored temporarily).
-	local item
-	if self._queued and #self._queued > 0 then
-		item = table.remove(self._queued, 1)
-	end
-
-	-- If nothing to process, clear the gate and return
-	if not item then
-		self._iterating = false
-		return
-	end
-
-	local utterance = item.utterance
-	local on_complete = item.on_complete
-	local prompt = self:_build_scratchpad_prompt(utterance)
-
-	-- Update scratchpad preview immediately so user sees "refining" state
-	self:_refresh_buf()
-
-	-- Try CodeCompanion first if handler.name is set
-	local handler = self.opts.handler
-	if handler and handler.name then
-		local ok, cc = pcall(require, "CodeCompanion")
-		if ok and cc.chat then
-			vim.notify("[outloud] scratchpad: refining with CodeCompanion", vim.log.levels.INFO)
-			-- Store the current instruction in case of error (for fallback)
-			self._pending_instruction = utterance
-
-			if self._cc_chat and vim.api.nvim_buf_is_valid(self._cc_chat.bufnr) then
-				-- Reuse existing chat session — add message + submit (not :send() which doesn't exist)
-				vim.notify("[outloud] scratchpad: sending follow-up in existing session", vim.log.levels.INFO)
-
-				-- Store callbacks on the chat object so they survive the submit call
-				local _self = self
-				self._cc_chat.callbacks.on_completed = {vim.schedule_wrap(function(chat)
-					local response_text = ""
-					if chat and chat.messages then
-						for _, msg in ipairs(chat.messages) do
-							if msg.role == "llm" then
-								response_text = msg.content or ""
-							end
-						end
-					end
-					_self._pending_instruction = nil
-					_self:_apply_scratchpad_update(response_text, on_complete)
-				end)}
-
-				self._cc_chat:add_message({ role = "user", content = prompt })
-				self._cc_chat:submit({ auto_submit = true })
-			else
-				-- Create a new chat session
-				cc.chat({
-					params = { adapter = handler.name },
-					messages = { { role = "user", content = prompt } },
-					auto_submit = true,
-					hidden = true,
-					callbacks = {
-						on_completed = vim.schedule_wrap(function(chat)
-							-- Store the chat object for reuse on follow-ups
-							self._cc_chat = chat
-							local response_text = ""
-							if chat and chat.messages then
-								for _, msg in ipairs(chat.messages) do
-									if msg.role == "llm" then
-										response_text = msg.content or ""
-									end
-								end
-							end
-							self._pending_instruction = nil
-							self:_apply_scratchpad_update(response_text, on_complete)
-						end),
-						on_error = vim.schedule_wrap(function(_, err_msg)
-							vim.notify("[outloud] CodeCompanion error: " .. tostring(err_msg or "unknown"), vim.log.levels.WARN)
-							local instr = self._pending_instruction or utterance
-							self._pending_instruction = nil
-							-- Fall through to plain-text merge below
-							self:_fallback_merge(instr, on_complete)
-						end),
-					},
-				})
-			end
-			return
-		end
-		-- CodeCompanion not available
-		vim.notify("[outloud] CodeCompanion not available, falling back to direct merge", vim.log.levels.WARN)
-	end
-
-	-- Custom function handler
-	if handler and handler.fn then
-		local result = handler.fn(utterance, { scratchpad = self.text })
-		if result and type(result) == "string" then
-			self:_apply_scratchpad_update(result, on_complete)
-			return
-		end
-	end
-
-	-- No handler — fall back to plain-text merge
-	self:_fallback_merge(utterance, on_complete)
-end
-
---- Fallback: merge partials + utterance directly into scratchpad text
---- without an LLM call (no handler configured, or handler failed).
----@param utterance string
----@param on_complete? fun(text: string)
-function Accumulator:_fallback_merge(utterance, on_complete)
-	local combined = self._partial_text ~= "" and (self._partial_text .. " " .. utterance) or utterance
-	self.text = self.text ~= "" and (self.text .. "\n" .. combined) or combined
-	self._partial_text = ""
-
-	if on_complete then
-		on_complete(self.text)
-	end
-
-	self._iterating = false
-	self:_refresh_buf()
-
-	-- _fallback_merge is called directly from _drain_queue (not via
-	-- _apply_scratchpad_update), so it must schedule the next drain itself.
-	if self._queued and #self._queued > 0 then
-		vim.schedule(function()
-			self:_drain_queue()
-		end)
-	end
-end
-
---- Update the scratchpad text and refresh the buffer.
---- Clears accumulated partials after a successful LLM iteration.
---- Yanks the refined content to the configured register so the user can
---- paste it immediately with `<reg>p`.
---- After the update, starts a 5-second delay window. Any fragments that
---- arrive during this window are accumulated. When the timer fires, if
---- there are pending fragments they are sent as a follow-up to the same
---- CodeCompanion chat (preserving conversation context).
----@param text string  the new scratchpad content
----@param on_complete? fun(text: string) callback
-function Accumulator:_apply_scratchpad_update(text, on_complete)
-	-- Replace the scratchpad content (not append)
-	self.text = text
-	-- Clear partials — they were incorporated into the LLM prompt and the response is the new state
-	self._partial_text = ""
-	self:_refresh_buf()
-	self._iterating = false
-
-	-- Yank refined content to register so user can paste immediately
-	local reg = self.opts.register or "o"
-	vim.fn.setreg(reg, text)
-
-	-- Always call the callback for the current iteration before processing queue
-	if on_complete then
-		on_complete(text)
-	end
-
-	-- If there are queued items from the original queue, process them immediately
-	if self._queued and #self._queued > 0 then
-		vim.schedule(function()
-			self:_drain_queue()
-		end)
-		return
-	end
-
-	-- Start a 5-second delay window for accumulating new fragments.
-	-- If new transcripts arrive during this window they go into
-	-- _pending_fragments. When the timer fires we send them as a
-	-- follow-up to the same chat session.
-	self:_start_delay_timer()
-end
-
 --- Confirm the accumulated text: invoke the handler and apply the result.
 ---@param on_complete? fun(text: string) callback with the handler result
 function Accumulator:confirm(on_complete)
@@ -441,7 +320,6 @@ function Accumulator:confirm(on_complete)
 	if handler and handler.name then
 		local ok, cc = pcall(require, "CodeCompanion")
 		if ok then
-			-- CodeCompanion is available — use it
 			vim.notify("[outloud] sending to CodeCompanion handler: " .. handler.name, vim.log.levels.INFO)
 			cc.chat({
 				params = { adapter = handler.name },
@@ -450,7 +328,6 @@ function Accumulator:confirm(on_complete)
 				hidden = true,
 				callbacks = {
 					on_completed = function(chat)
-						-- Extract assistant response from chat messages
 						local result_text = ""
 						if chat and chat.messages then
 							for _, msg in ipairs(chat.messages) do
@@ -507,9 +384,7 @@ function Accumulator:_insert_at_cursor(text)
 	if #lines == 1 then
 		vim.api.nvim_buf_set_text(buf, line, col, line, col, { text })
 	else
-		-- Replace current line with first line of multi-line text
 		vim.api.nvim_buf_set_lines(buf, line, line + 1, false, { lines[1] })
-		-- Insert remaining lines after it
 		for i = 2, #lines do
 			vim.api.nvim_buf_set_lines(buf, line + i - 1, line + i - 1, false, { lines[i] })
 		end
@@ -544,10 +419,9 @@ function Accumulator:open_preview()
 	vim.api.nvim_set_option_value("filetype", "outloud-accum", { buf = self.buf })
 	vim.api.nvim_set_option_value("wrap", true, { win = self.win })
 
-	if not vim.api.nvim_win_is_valid(prev) then
-		return
+	if vim.api.nvim_win_is_valid(prev) then
+		vim.api.nvim_set_current_win(prev)
 	end
-	vim.api.nvim_set_current_win(prev)
 end
 
 --- Close the preview window.
@@ -580,7 +454,7 @@ function Accumulator:_refresh_buf()
 
 	-- Also update the scratchpad floating preview if open
 	if self._scratchpad and self._scratchpad:is_open() then
-		self._scratchpad:show(self.text, self._iterating)
+		self._scratchpad:show(self.text, self._refining)
 	end
 end
 
@@ -593,7 +467,7 @@ function Accumulator:toggle_scratchpad()
 			height = self.opts.scratchpad_height or 20,
 		})
 	end
-	self._scratchpad:toggle(self.text, self._iterating)
+	self._scratchpad:toggle(self.text, self._refining)
 end
 
 --- Copy the scratchpad content to the configured register.
@@ -609,7 +483,9 @@ end
 
 --- Clean up buffer and window.
 function Accumulator:dispose()
-	self:_cancel()
+	self._refining = false
+	self._chunk_buffer = {}
+	self._cc_chat = nil
 	self:close_preview()
 	if self._scratchpad then
 		self._scratchpad:dispose()
@@ -621,236 +497,6 @@ function Accumulator:dispose()
 	self.buf = nil
 	self.chunks = {}
 	self.text = ""
-end
-
---- Cancel any in-flight LLM iteration and discard the queue.
---- Called when the user stops transcription or disposes the accumulator.
-function Accumulator:_cancel()
-	-- Clear the queue so no more utterances are processed
-	self._queued = {}
-	self._iterating = false
-	-- Clear pending fragments and stop all timers
-	self._pending_fragments = {}
-	self:_stop_delay_timer()
-	self:_stop_silence_timer()
-	-- Clear the chat object so a fresh session is created next time
-	self._cc_chat = nil
-	self._pending_instruction = nil
-end
-
---- Start (or restart) the post-result delay timer.
---- When it fires, any accumulated _pending_fragments are sent as a
---- follow-up to the existing CodeCompanion chat.
-function Accumulator:_start_delay_timer()
-	self:_stop_delay_timer()
-	self._delay_timer = vim.uv.new_timer()
-	self._delay_timer:start(5000, 0, vim.schedule_wrap(function()
-		self._delay_timer = nil
-		self:_flush_pending_fragments()
-	end))
-end
-
---- Stop the post-result delay timer.
-function Accumulator:_stop_delay_timer()
-	if self._delay_timer then
-		self._delay_timer:stop()
-		self._delay_timer:close()
-		self._delay_timer = nil
-	end
-end
-
---- Start (or restart) the silence timer.
---- When it fires (1 second of no new fragments), if there are pending
---- unrefined segments and no refinement is in progress, flush them.
-function Accumulator:_start_silence_timer()
-	self:_stop_silence_timer()
-	self._silence_timer = vim.uv.new_timer()
-	self._silence_timer:start(1000, 0, vim.schedule_wrap(function()
-		self._silence_timer = nil
-		-- Only flush if idle (no refinement in flight) and we have pending fragments.
-		-- _iterating is now reliably set by _flush_pending_fragments before dispatching
-		-- to CodeCompanion, so this guard prevents concurrent LLM calls.
-		if not self._iterating and #self._pending_fragments > 0 then
-			self:_flush_pending_fragments()
-		end
-	end))
-end
-
---- Stop the silence timer.
-function Accumulator:_stop_silence_timer()
-	if self._silence_timer then
-		self._silence_timer:stop()
-		self._silence_timer:close()
-		self._silence_timer = nil
-	end
-end
-
---- Send accumulated _pending_fragments as a follow-up to the LLM.
---- Reuses the existing CodeCompanion chat session via `chat:send()` to
---- avoid session proliferation.
---- Stops the silence timer since we're acting on the pending fragments.
----
---- Sets _iterating = true before dispatching so the silence timer and
---- add_fragment() know a refinement is in flight. Clears it in the
---- callback and drains any queued items, matching the main iterate path.
-function Accumulator:_flush_pending_fragments()
-	if #self._pending_fragments == 0 then
-		return
-	end
-	-- Defensive gate: callers check _iterating before invoking, but scheduled
-	-- calls (empty fragment, immediate trigger) may run after another path
-	-- already started a refinement. If so, bail — the fragments will be
-	-- picked up when the current iteration completes.
-	if self._iterating then
-		return
-	end
-	-- Stop the silence timer — we're processing the pending fragments now
-	self:_stop_silence_timer()
-
-	local fragments = self._pending_fragments
-	self._pending_fragments = {}
-
-	-- Combine all pending fragments into a single instruction
-	local combined = table.concat(fragments, " ")
-
-	-- Don't send an empty instruction — nothing meaningful to refine
-	if combined == "" or combined:match("^%s+$") then
-		return
-	end
-
-	-- Build the prompt for the follow-up instruction
-	local prompt = self:_build_scratchpad_prompt(combined)
-
-	local handler = self.opts.handler
-	if handler and handler.name then
-		if self._cc_chat and vim.api.nvim_buf_is_valid(self._cc_chat.bufnr) then
-			vim.notify("[outloud] scratchpad: sending follow-up in existing session", vim.log.levels.INFO)
-
-			-- Set the gate so the silence timer and add_fragment know a
-			-- refinement is in flight. Cleared in on_completed below.
-			self._iterating = true
-
-			local _self = self
-			self._cc_chat.callbacks.on_completed = {vim.schedule_wrap(function(chat)
-				local response_text = ""
-				if chat and chat.messages then
-					for _, msg in ipairs(chat.messages) do
-						if msg.role == "llm" then
-							response_text = msg.content or ""
-						end
-					end
-				end
-				_self.text = response_text
-				_self:_refresh_buf()
-				local reg = _self.opts.register or "o"
-				vim.fn.setreg(reg, response_text)
-
-				-- Clear the gate and resume queue processing
-				_self._iterating = false
-
-				-- Drain any items that queued up while this flush was in flight
-				if _self._queued and #_self._queued > 0 then
-					vim.schedule(function()
-						_self:_drain_queue()
-					end)
-					return
-				end
-
-				_self:_start_delay_timer()
-			end)}
-
-			self._cc_chat:add_message({ role = "user", content = prompt })
-			self._cc_chat:submit({ auto_submit = true })
-			return
-		end
-		-- No existing chat or send method, fall through to plain-text
-	end
-
-	-- No handler or CodeCompanion unavailable: plain-text fallback
-	self.text = self.text ~= "" and (self.text .. "\n" .. combined) or combined
-	self:_refresh_buf()
-	self:_start_delay_timer()
-end
-
---- Check if an utterance matches any immediate trigger keywords.
---- Returns true if the utterance (lowercased) contains any configured trigger.
----@param utterance string
----@return boolean
-function Accumulator:_is_immediate_trigger(utterance)
-	local triggers = self.opts.immediate_triggers
-	if not triggers or #triggers == 0 then
-		return false
-	end
-	local lower = utterance:lower()
-	for _, trigger in ipairs(triggers) do
-		if lower:find(trigger:lower(), 1, true) then
-			return true
-		end
-	end
-	return false
-end
-
---- Add a fragment to the pending accumulation buffer.
---- If a delay timer is running (post-result window), the fragment is
---- accumulated UNLESS it matches an immediate trigger keyword — in which
---- case the pending fragments are flushed right away.
---- Otherwise it goes into the normal queue.
----
---- An empty fragment is never accumulated; instead, if there are pending
---- unrefined segments and no refinement is in progress, it triggers an
---- immediate flush.
----@param utterance string
-function Accumulator:add_fragment(utterance)
-	-- Empty or whitespace-only fragment: signal to flush pending segments if idle
-	if not utterance or utterance:match("^%s*$") then
-		if not self._iterating and #self._pending_fragments > 0 then
-			self:_stop_silence_timer()
-			vim.schedule(function()
-				self:_flush_pending_fragments()
-			end)
-		end
-		return
-	end
-
-	-- Check for immediate triggers: bypass the delay and flush now
-	local immediate = self:_is_immediate_trigger(utterance)
-
-	-- If a delay timer is running, accumulate for the next flush
-	if self._delay_timer then
-		table.insert(self._pending_fragments, utterance)
-		if immediate then
-			-- Immediate trigger: flush right away instead of waiting
-			self:_stop_delay_timer()
-			self._delay_timer = nil
-			vim.schedule(function()
-				self:_flush_pending_fragments()
-			end)
-		else
-			-- Reset the 5s delay timer so we wait from the *last* fragment
-			self:_start_delay_timer()
-			-- Also reset the 1s silence timer
-			self:_start_silence_timer()
-		end
-		return
-	end
-
-	-- No delay window: queue normally for immediate processing
-	if self._iterating then
-		if not self._queued then
-			self._queued = {}
-		end
-		table.insert(self._queued, { utterance = utterance, on_complete = nil })
-	else
-		-- Nothing in flight, kick off processing
-		self._iterating = true
-		if not self._queued then
-			self._queued = {}
-		end
-		table.insert(self._queued, { utterance = utterance, on_complete = nil })
-		vim.schedule(function()
-			self:_drain_queue()
-		end)
-	end
 end
 
 --- Check if there is accumulated text.

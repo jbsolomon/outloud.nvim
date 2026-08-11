@@ -704,14 +704,14 @@ end
 
 --- Add a partial transcript line to the sidebar (up to 5 visible).
 ---@param text string
-function Sidebar:set_partial(text)
+function Sidebar:set_chunk(text)
 	if text == nil or text == "" then
 		return
 	end
 	self:_ensure_buf()
 	self.open_kind = nil
 	self:_trim_partials()
-	self:_push({ kind = "partial", text = text })
+self:_push({ kind = "chunk", text = text })
 	self:_render_all()
 end
 
@@ -719,7 +719,7 @@ end
 function Sidebar:clear_partial()
 	local i = 1
 	while i <= #self.entries do
-		if self.entries[i] and self.entries[i].kind == "partial" then
+if self.entries[i] and self.entries[i].kind == "chunk" then
 			table.remove(self.entries, i)
 		else
 			i = i + 1
