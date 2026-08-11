@@ -14,6 +14,9 @@ pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8000";
 
 pub struct WhisperTranscriberConfig {
     pub server_url: String,
+    /// Timeout for each /inference request. Larger models (e.g. turbo q8)
+    /// on CPU can need 60–120 s for long utterances.
+    pub timeout_secs: u64,
 }
 
 pub struct WhisperTranscriber {
@@ -26,7 +29,7 @@ impl WhisperTranscriber {
         Self {
             server_url: config.server_url,
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(config.timeout_secs))
                 .build()
                 .expect("failed to build HTTP client"),
         }
@@ -35,6 +38,7 @@ impl WhisperTranscriber {
     /// POST to whisper-server's /inference endpoint.
     fn try_inference_endpoint(&self, wav_bytes: &[u8]) -> Result<String> {
         let url = format!("{}/inference", self.server_url);
+        let start = std::time::Instant::now();
 
         let form = reqwest::blocking::multipart::Form::new()
             .part(
@@ -52,12 +56,17 @@ impl WhisperTranscriber {
             // boundaries, reducing mid-word truncation at chunk edges.
             .text("split_on_word", "true");
 
+        tracing::info!("POST {} ({} bytes)", url, wav_bytes.len());
+
         let resp = self
             .client
             .post(&url)
             .multipart(form)
             .send()
             .context("inference endpoint request failed")?;
+
+        let elapsed_send = start.elapsed();
+        tracing::info!("response received in {:?}", elapsed_send);
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -66,6 +75,8 @@ impl WhisperTranscriber {
         }
 
         let body: InferenceResponse = resp.json().context("failed to parse inference response")?;
+        let total_elapsed = start.elapsed();
+        tracing::info!("inference complete in {:?}", total_elapsed);
         Ok(body.text.trim().to_string())
     }
 }
@@ -101,25 +112,53 @@ struct InferenceResponse {
 }
 
 /// Encode f32 samples as a WAV file in memory.
+///
+/// Whisper-server expects 16 kHz mono audio. If the device captures at a
+/// different rate (e.g. 48 kHz on WASAPI shared mode), resample via
+/// nearest-neighbor before encoding.
 fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
+    const WHISPER_SAMPLE_RATE: u32 = 16000;
+
+    let samples_16k = if sample_rate == WHISPER_SAMPLE_RATE {
+        samples.to_vec()
+    } else {
+        resample_nearest(samples, sample_rate, WHISPER_SAMPLE_RATE)
+    };
+
     let mut buf = Vec::new();
     let mut cursor = Cursor::new(&mut buf);
 
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate,
+        sample_rate: WHISPER_SAMPLE_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
 
     let mut writer = hound::WavWriter::new(&mut cursor, spec)?;
-    for &sample in samples {
+    for &sample in &samples_16k {
         let s16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
         writer.write_sample(s16)?;
     }
     writer.finalize()?;
 
     Ok(buf)
+}
+
+/// Resample `samples` from `from_rate` to `to_rate` using nearest-neighbor
+/// interpolation. Good enough for speech — whisper-server will do its own
+/// filtering anyway.
+fn resample_nearest(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let out_len = (samples.len() as u64 * to_rate as u64 / from_rate as u64) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_idx = ((i as u64 * from_rate as u64) / to_rate as u64) as usize;
+        out.push(samples[src_idx.min(samples.len() - 1)]);
+    }
+    out
 }
 
 #[cfg(test)]

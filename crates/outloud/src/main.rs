@@ -26,8 +26,12 @@ fn build_transcriber() -> Result<Box<dyn SpeechTranscriber>> {
             };
             let server_url =
                 std::env::var("OUTLOUD_STT_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+            let timeout_secs: u64 = std::env::var("OUTLOUD_STT_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30);
             Ok(Box::new(WhisperTranscriber::new(
-                WhisperTranscriberConfig { server_url },
+                WhisperTranscriberConfig { server_url, timeout_secs },
             )))
         }
         #[cfg(feature = "openai")]
