@@ -128,26 +128,31 @@ function M.check()
 		if not model_cfg.server_url then
 			if model_cfg.path then
 				report_model_file(model_cfg.path, "whisper model (explicit path)")
+			elseif model_cfg.filename then
+				-- User specified a local filename
+				local default_path = data_dir() .. "/models/" .. model_cfg.filename
+				report_model_file(default_path, string.format("whisper model '%s' (local)", model_cfg.filename))
 			else
-				-- Try to resolve the filename the same way install.lua does
+				-- Named model: resolve from known list
 				local install = require("outloud.install")
-				local resolved = install.resolve_model_filename(
-					model_cfg.size or "medium",
-					model_cfg.filename,
-					model_cfg.repo
-				)
+				local resolved = install.resolve_model_filename(model_cfg.size or "medium")
 				if resolved then
 					local default_path = data_dir() .. "/models/" .. resolved
-					local label = resolved
+					local label = model_cfg.size or "medium"
 					if model_cfg.download_url then
 						label = label .. " (from download_url)"
 					end
 					report_model_file(default_path, string.format("whisper model '%s'", label))
 				else
+					local available = {}
+					for name, _ in pairs(install.WHISPER_MODELS) do
+						table.insert(available, name)
+					end
+					table.sort(available)
 					vim.health.warn(
-						string.format("whisper model filename unknown for repo '%s'", model_cfg.repo),
+						string.format("unknown whisper model name '%s'", model_cfg.size),
 						{
-							"Set model.filename explicitly, or run :OutloudStart to auto-resolve from HuggingFace",
+							"Valid model names: " .. table.concat(available, ", "),
 						}
 					)
 				end

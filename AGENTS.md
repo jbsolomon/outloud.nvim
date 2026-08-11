@@ -1,5 +1,17 @@
 # AGENTS.md
 
+# CRITICAL AGENT INSTRUCTIONS:
+
+NO CONVERSATIONAL TURN-TAKING: When you decide on an action, you MUST invoke the corresponding tool immediately in the exact same response.  MAINTAIN FORWARD MOMENTUM!
+
+DO NOT ASK FOR PERMISSION: Never state what you are going to do and then stop generating.
+
+THINK THEN ACT: If you explain your plan, the very next lines of your output must be the tool call syntax. Do not wait for the user to say "go" or "ok".
+
+---
+
+# What this file is:
+
 > Context file for AI agents working on **outloud.nvim**.
 > Read this before making changes. It summarises the project state, points to plans, and records architectural decisions.
 

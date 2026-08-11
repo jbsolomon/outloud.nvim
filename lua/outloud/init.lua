@@ -24,10 +24,9 @@ local M = {}
 M.defaults = {
 	backend = "whisper",
 	model = {
-		size = "medium",           -- whisper model size: "tiny", "base", "small", "medium", "large"
-		repo = "ggerganov/whisper.cpp", -- HuggingFace repo for model download
-		-- filename = "ggml-medium.bin",      -- override model filename (e.g. "ggml-tiny-q5_1.bin")
-		-- download_url = "...",              -- direct download URL (bypasses HuggingFace)
+		size = "large-v3-turbo-q8_0", -- whisper model name: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v1, large-v2, large-v3, large-v3-turbo (plus -q5_0, -q5_1, -q8_0 quantized variants)
+		-- filename = "ggml-medium.bin",      -- local model filename (must exist in data_dir/models/)
+		-- download_url = "...",              -- direct download URL (bypasses canonical source)
 		hf_repo = install.HF_REPO, -- for openai backend: llama-server HuggingFace repo
 		server_port = install.WHISPER_DEFAULT_PORT
 		-- server_url = "http://127.0.0.1:8000",  -- override to use external server
@@ -395,10 +394,9 @@ _start_with_server = function (backend, ui_state, signal, on_server_phase, on_se
 		if backend == "whisper" then
 			install.start_whisper_server({
 				port = M.config.model.server_port or install.WHISPER_DEFAULT_PORT,
-				model_size = M.config.model.size or "medium",
+				model_name = M.config.model.size,
 				model_path = M.config.model.path,
 				model_filename = M.config.model.filename,
-				model_repo = M.config.model.repo,
 				download_url = M.config.model.download_url,
 				on_phase = on_server_phase
 			}, on_server_ready)

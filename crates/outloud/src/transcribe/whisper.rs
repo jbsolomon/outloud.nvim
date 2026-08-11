@@ -36,12 +36,21 @@ impl WhisperTranscriber {
     fn try_inference_endpoint(&self, wav_bytes: &[u8]) -> Result<String> {
         let url = format!("{}/inference", self.server_url);
 
-        let form = reqwest::blocking::multipart::Form::new().part(
-            "file",
-            reqwest::blocking::multipart::Part::bytes(wav_bytes.to_vec())
-                .file_name("audio.wav")
-                .mime_str("audio/wav")?,
-        );
+        let form = reqwest::blocking::multipart::Form::new()
+            .part(
+                "file",
+                reqwest::blocking::multipart::Part::bytes(wav_bytes.to_vec())
+                    .file_name("audio.wav")
+                    .mime_str("audio/wav")?,
+            )
+            // no_context=false: carry the last ~1000 tokens as context into each
+            // chunk so the model has continuity across chunk boundaries. This
+            // eliminates trailing "..." and leading punctuation artifacts that
+            // occur when each chunk is transcribed in isolation.
+            .text("no_context", "false")
+            // split_on_word=true: split on word boundaries rather than token
+            // boundaries, reducing mid-word truncation at chunk edges.
+            .text("split_on_word", "true");
 
         let resp = self
             .client
