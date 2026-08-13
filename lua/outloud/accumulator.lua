@@ -114,6 +114,11 @@ function Accumulator:_cancel()
 		end)
 		self._cc_chat = nil
 	end
+
+	-- Close the scratchpad floating popup
+	if self._scratchpad then
+		self._scratchpad:close()
+	end
 end
 
 --- Clear all accumulated chunks.
