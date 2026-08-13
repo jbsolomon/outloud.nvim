@@ -98,6 +98,24 @@ function Accumulator:append(text, is_final)
 	self:_refresh_buf()
 end
 
+--- Cancel any in-flight refinement and clear pending chunks.
+--- Calls `chat:stop()` on the CodeCompanion session to abort the network request,
+--- and sets `_cancelled = true` so that if a late callback fires, `_apply_refinement`
+--- will bail out instead of overwriting accumulator state.
+function Accumulator:_cancel()
+	self._cancelled = true
+	self._refining = false
+	self._chunk_buffer = {}
+
+	-- Properly abort the CodeCompanion chat if one is in flight
+	if self._cc_chat then
+		pcall(function()
+			self._cc_chat:stop()
+		end)
+		self._cc_chat = nil
+	end
+end
+
 --- Clear all accumulated chunks.
 function Accumulator:clear()
 	self.chunks = {}
@@ -200,8 +218,15 @@ end
 
 --- Apply the LLM response: update scratchpad text, refresh buffer, yank to register,
 --- then check for buffered chunks and trigger further refinement if needed.
+--- Bail out if the user cancelled while the LLM was running.
 ---@param text string  the new scratchpad content
 function Accumulator:_apply_refinement(text)
+	-- Guard: user cancelled while LLM was in flight
+	if self._cancelled then
+		self._cancelled = false
+		return
+	end
+
 	self.text = text
 	self._refining = false
 	self:_refresh_buf()

@@ -666,6 +666,11 @@ function M.confirm_accumulator()
 		V.notify("[outloud] accumulator is empty", VLL.WARN)
 		return
 	end
+
+	-- Cancel any in-flight refinement chat and dispose the old session
+	-- so a fresh chat is created for the new transcripting work
+	M._accumulator:_cancel()
+
 	M._accumulator:confirm(function (text)
 		-- After handler completes, insert result at cursor
 		local sb = M._ensure_sidebar()
@@ -680,6 +685,7 @@ function M.cancel_accumulator()
 		V.notify("[outloud] accumulator not active", VLL.WARN)
 		return
 	end
+	M._accumulator:_cancel()
 	M._accumulator:clear()
 	V.notify("[outloud] accumulator cleared", VLL.INFO)
 end

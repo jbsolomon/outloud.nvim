@@ -10,7 +10,7 @@ local WHISPER_HEALTH_PATH = "/"
 
 --- Known whisper.cpp model names (from ggerganov/whisper.cpp repo).
 --- These are downloaded directly, no HuggingFace probing needed.
-local WHISPER_MODELS = {
+local GG_WHISPER_MODELS = {
     ["tiny"] = "ggml-tiny.bin",
     ["tiny.en"] = "ggml-tiny.en.bin",
     ["tiny-q5_1"] = "ggml-tiny-q5_1.bin",
@@ -42,6 +42,10 @@ local WHISPER_MODELS = {
     ["large-v3-turbo-q5_0"] = "ggml-large-v3-turbo-q5_0.bin",
     ["large-v3-turbo-q8_0"] = "ggml-large-v3-turbo-q8_0.bin",
 }
+
+--local OTHER_WHISPER_MODELS = {
+--    ['
+--}
 
 --- Canonical source for whisper.cpp models (not an arbitrary HF repo).
 local WHISPER_MODEL_SRC = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
@@ -484,7 +488,7 @@ end
 ---@param model_name string the model name (e.g. "medium", "large-v3-turbo")
 ---@return string filename, or nil if model name is unknown
 local function resolve_model_filename(model_name)
-	return WHISPER_MODELS[model_name]
+	return GG_WHISPER_MODELS[model_name]
 end
 
 --- Resolve the whisper-server binary path.
@@ -794,7 +798,7 @@ M._ensure_model_and_start = function(bin, port, model_name, model_path, model_fi
 	if not resolved then
 		-- List available models for the error message
 		local available = {}
-		for name, _ in pairs(WHISPER_MODELS) do
+		for name, _ in pairs(GG_WHISPER_MODELS) do
 			table.insert(available, name)
 		end
 		table.sort(available)
@@ -958,7 +962,7 @@ end
 M.HF_REPO = HF_REPO
 M.DEFAULT_PORT = DEFAULT_PORT
 M.WHISPER_DEFAULT_PORT = WHISPER_DEFAULT_PORT
-M.WHISPER_MODELS = WHISPER_MODELS
+M.WHISPER_MODELS = GG_WHISPER_MODELS
 M.resolve_model_filename = resolve_model_filename
 
 -- Daemon build lifecycle (called from init.lua's M.start()).

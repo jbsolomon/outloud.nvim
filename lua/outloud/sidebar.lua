@@ -409,7 +409,7 @@ function Sidebar:_entry_lines(e, w)
 
 	if e.kind == "turn" then
 		out = label(e.text or "", e.time or "", w)
-	elseif e.kind == "partial" then
+	elseif e.kind == "chunk" then
 		out = label(e.text or "", "…", w)
 	elseif e.kind == "error" then
 		out = bullet("⏺ ! error", e.text, w)
@@ -555,7 +555,7 @@ function Sidebar:_render_entry(i)
 end
 
 --- Trim entries to keep only the last MAX_TURNS turn entries.
---- Partials and errors are not counted against the limit.
+--- Chunks and errors are not counted against the limit.
 local MAX_TURNS = 5
 
 function Sidebar:_trim_turns()
@@ -569,7 +569,7 @@ function Sidebar:_trim_turns()
 	if drop <= 0 then
 		return
 	end
-	-- Drop the oldest final transcripts, but leave partial lines alone.
+	-- Drop the oldest final transcripts, but leave chunk lines alone.
 	local dropped = 0
 	local i = 1
 	while dropped < drop and i <= #self.entries do
@@ -679,30 +679,30 @@ end
 
 -- Conversation ---------------------------------------------------------
 
---- Keep only the last MAX_PARTIALS partial lines in the sidebar.
-local MAX_PARTIALS = 5
+--- Keep only the last MAX_CHUNKS chunk lines in the sidebar.
+local MAX_CHUNKS = 5
 
-function Sidebar:_trim_partials()
-	-- Count how many partial lines exist
+function Sidebar:_trim_chunks()
+	-- Count how many chunk lines exist
 	local count = 0
 	for _, e in ipairs(self.entries) do
-		if e and e.kind == "partial" then count = count + 1 end
+		if e and e.kind == "chunk" then count = count + 1 end
 	end
-	local drop = count - MAX_PARTIALS
+	local drop = count - MAX_CHUNKS
 	if drop <= 0 then return end
-	-- Drop the oldest partial lines from the top
+	-- Drop the oldest chunk lines from the top
 	local removed = 0
 	while removed < drop and #self.entries > 0 do
-		if self.entries[1] and self.entries[1].kind == "partial" then
+		if self.entries[1] and self.entries[1].kind == "chunk" then
 			table.remove(self.entries, 1)
 			removed = removed + 1
 		else
-			break -- stop at first non-partial
+			break -- stop at first non-chunk
 		end
 	end
 end
 
---- Add a partial transcript line to the sidebar (up to 5 visible).
+--- Add a chunk transcript line to the sidebar (up to 5 visible).
 ---@param text string
 function Sidebar:set_chunk(text)
 	if text == nil or text == "" then
@@ -710,13 +710,13 @@ function Sidebar:set_chunk(text)
 	end
 	self:_ensure_buf()
 	self.open_kind = nil
-	self:_trim_partials()
+	self:_trim_chunks()
 self:_push({ kind = "chunk", text = text })
 	self:_render_all()
 end
 
---- Remove all partial transcript lines (replaced by the final transcript).
-function Sidebar:clear_partial()
+--- Remove all chunk transcript lines (replaced by the final transcript).
+function Sidebar:clear_chunks()
 	local i = 1
 	while i <= #self.entries do
 if self.entries[i] and self.entries[i].kind == "chunk" then
@@ -731,7 +731,7 @@ end
 ---@param transcript string
 function Sidebar:begin_turn(transcript)
 	self:_ensure_buf()
-	self:clear_partial()
+	self:clear_chunks()
 	self:_push({ kind = "turn", text = transcript or "", time = os.date("%H:%M") })
 end
 
